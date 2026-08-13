@@ -53,7 +53,28 @@ button,select,input{font-family:inherit;font-size:inherit;color:inherit;font-var
 }
 .iconbtn:active{background:var(--deck)}
 
+.tabs{position:sticky;top:0;z-index:39;display:flex;gap:0;background:rgba(6,11,16,.94);
+  backdrop-filter:blur(12px);border-bottom:1px solid var(--line);padding:0 16px}
+.tabs button{
+  flex:1;background:none;border:none;border-bottom:2px solid transparent;
+  color:var(--faint);padding:13px 4px;font-size:12px;font-weight:700;
+  letter-spacing:.11em;text-transform:uppercase;cursor:pointer;
+}
+.tabs button.on{color:var(--ink);border-bottom-color:var(--stbd)}
+.tabs.hide{display:none}
 .wrap{padding:18px 16px 80px;max-width:640px;margin:0 auto}
+.tcgraph{width:100%;height:150px;display:block;margin:6px 0 2px}
+.tcrow{display:flex;justify-content:space-between;gap:10px;padding:9px 0;
+  border-bottom:1px solid var(--line-soft);font-size:13.5px;align-items:baseline}
+.tcrow:last-child{border-bottom:none}
+.tcrow .tm{font-family:var(--mono);font-weight:600;flex:0 0 52px}
+.tcrow .ev{flex:1;color:var(--dim)}
+.tcrow .vl{font-family:var(--mono);font-weight:600;text-align:right}
+.flood{color:var(--stbd)} .ebb{color:var(--port)} .slack{color:var(--dim)}
+.calcbox{border:1px solid var(--line);border-radius:12px;background:var(--hull);padding:15px;margin-top:10px}
+.calcres{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:14px}
+.calcres .cell{padding:11px 12px}
+.stationmeta{font-size:11.5px;color:var(--faint);line-height:1.6;margin-top:8px}
 .view{display:none}
 .view.on{display:block}
 
@@ -289,9 +310,15 @@ textarea.control{min-height:190px;font-family:var(--mono);font-size:12px;line-he
   <button class="iconbtn" id="navBtn">Setup</button>
 </header>
 
+<nav class="tabs" id="tabs">
+  <button data-tab="viewPlan" class="on">Transit</button>
+  <button data-tab="viewTides">Tides &amp; Currents</button>
+</nav>
+
 <main class="wrap">
   <section class="view on" id="viewPlan"></section>
   <section class="view" id="viewBrief"></section>
+  <section class="view" id="viewTides"></section>
   <section class="view" id="viewAdmin"></section>
 </main>
 
@@ -4014,21 +4041,25 @@ async function loadEnvironment(route, win) {
   // ---- gauge chain: tide and current, interpolated between gauges ----
   const gauges = gaugeChain();
   const gaugeData = { tide: {}, current: {} };
+  /* A gauge that simply does not publish a product is not a failure. Listing
+     those as FAILED buried the one row that had actually broken, so a station
+     without an id for a product is skipped silently — the coverage picture is
+     in Setup, and the brief already reports waypoints beyond the gauges. */
   await Promise.all(gauges.flatMap(g => ['tide', 'current'].map(async kind => {
     const configured = live ? g[kind] : true;
-    if (!configured) {
-      sources.push({ station: g.id, kind, name: g.name + ' — ' + kind,
-                     error: 'no CO-OPS id configured', quality: 'FAILED' });
-      return;
-    }
+    if (!configured) return;
     try {
       const r = await P[kind].load(g.id, win, g, g);
       gaugeData[kind][g.id] = r;
       sources.push({ station: g.id, kind, name: g.name + ' — ' + kind, ...r,
                      series: undefined, count: r.series.length });
     } catch (e) {
+      const msg = String(e.message || e);
       sources.push({ station: g.id, kind, name: g.name + ' — ' + kind,
-                     error: String(e.message || e), quality: 'FAILED' });
+                     error: /No data was found/i.test(msg)
+                       ? 'station not reporting'
+                       : msg,
+                     quality: 'FAILED' });
     }
   })));
 
@@ -4046,7 +4077,7 @@ async function loadEnvironment(route, win) {
 
   /* ---- prediction check: observed vs predicted current, right now ---- */
   const checks = [];
-  await Promise.all(gauges.filter(g => g.currentObs).map(async g => {
+  await Promise.all(gauges.filter(g => live ? g.currentObs : true).map(async g => {
     try {
       const obs = await P.currentObs.load(g.id, win, g, g);
       if (!obs || !obs.series.length) return;
@@ -4066,9 +4097,15 @@ async function loadEnvironment(route, win) {
                      name: g.name + ' — observed current', ...obs,
                      series: undefined, count: obs.series.length });
     } catch (e) {
+      /* This gauge is configured to publish observations, so nothing coming
+         back means the gauge is down — a real outage, worth reporting. */
+      const msg = String(e.message || e);
       sources.push({ station: g.id + '-obs', kind: 'currentObs',
                      name: g.name + ' — observed current',
-                     error: String(e.message || e), quality: 'FAILED' });
+                     error: /No data was found/i.test(msg)
+                       ? 'gauge offline — no observations reporting'
+                       : msg,
+                     quality: 'FAILED' });
     }
   }));
 
@@ -4698,7 +4735,7 @@ function renderBrief(b) {
     : (s.quality === 'FAILED' || s.stale) ? 'stale' : 'gap';
   const srcHtml = b.env.sources.map(s => {
     let detail;
-    if (s.quality === 'FAILED') detail = esc(String(s.error).slice(0, 44));
+    if (s.quality === 'FAILED') detail = esc(String(s.error).slice(0, 70));
     else if (s.quality === 'CACHED') detail = `${s.count} pts · ${fmtDuration(s.ageMs)} old`;
     else detail = `${s.count} pts · ${fmtClock(s.retrieved, tz)}`;
     return `<div class="src">
@@ -4717,8 +4754,10 @@ function renderBrief(b) {
       const failed = b.env.sources.filter(s => s.quality === 'FAILED');
       if (!cached.length && !failed.length) return '';
       const oldest = cached.length ? Math.max(...cached.map(s => s.ageMs)) : 0;
+      const offline = failed.filter(s => /offline|not reporting/.test(String(s.error || '')));
       return `<div class="mockbar" style="border-color:rgba(230,169,60,.45);background:rgba(230,169,60,.09);color:#E8CB92">
         <b style="color:var(--caution)">${stale.length ? 'Stale data' : failed.length && !cached.length ? 'Data unavailable' : 'Cached data'}</b><br>
+        ${offline.length ? `${offline.map(s => esc(s.name.split(' — ')[0])).join(', ')} ${offline.length === 1 ? 'is' : 'are'} not reporting — a NOAA gauge outage, not a fault in this app. ` : ''}
         ${cached.length ? `${cached.length} source${cached.length === 1 ? '' : 's'} could not be refreshed and are showing cached values, oldest ${fmtDuration(oldest)} old. ` : ''}
         ${failed.length ? `${failed.length} source${failed.length === 1 ? ' has' : 's have'} no data at all and are shown as unavailable rather than estimated.` : ''}</div>`;
     })()}
@@ -5329,12 +5368,320 @@ function renderUnderway() {
   });
 }
 
+/* =========================================================================
+   TIDES & CURRENTS
+   Station-level NOAA predictions, presented the way the pilot reads them:
+   the events table, the curve, and an answer for one exact moment.
+   Values here are per-station and unblended — this tab is the raw NOAA view.
+   The transit brief is where interpolation between stations happens.
+   ======================================================================= */
+
+const TC = {
+  stationId: null, kind: 'tide', date: null,
+  packs: {}, loading: false, error: null,
+  calc: { time: '', result: null }
+};
+
+function tcStations(kind) {
+  return gaugeChain().filter(g => g[kind === 'tide' ? 'tide' : 'current']);
+}
+
+function tcDefaultDate() {
+  const p = {};
+  for (const part of new Intl.DateTimeFormat('en-CA', { timeZone: TZ(),
+      year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date()))
+    if (part.type !== 'literal') p[part.type] = part.value;
+  return `${p.year}-${p.month}-${p.day}`;
+}
+
+async function tcLoad() {
+  const kind = TC.kind;
+  const g = tcStations(kind).find(x => x.id === TC.stationId);
+  if (!g) { TC.error = 'No station selected.'; return; }
+  const [y, m, d] = TC.date.split('-').map(Number);
+  const start = wallToEpoch(y, m, d, 0, 0, TZ());
+  const win = { start: start - 6 * HOUR, end: start + 30 * HOUR };
+  const key = kind + '|' + g.id + '|' + TC.date;
+  if (TC.packs[key]) return;
+  TC.loading = true; TC.error = null;
+  try {
+    TC.packs[key] = await providers()[kind].load(g.id, win, g, g);
+  } catch (e) {
+    TC.error = String(e.message || e);
+    TC.packs[key] = null;
+  }
+  TC.loading = false;
+}
+
+function tcPack() { return TC.packs[TC.kind + '|' + TC.stationId + '|' + TC.date]; }
+
+function tcDayWindow() {
+  const [y, m, d] = TC.date.split('-').map(Number);
+  const start = wallToEpoch(y, m, d, 0, 0, TZ());
+  return { start, end: start + 24 * HOUR };
+}
+
+/* ---- events ---- */
+function tideEventsForDay(pack, win) {
+  if (!pack) return [];
+  return findTurns(pack.series, 'heightFt', win).map(e => ({
+    t: e.t, label: e.kind === 'HIGH' ? 'High' : 'Low',
+    value: e.heightFt, unit: 'ft', cls: ''
+  }));
+}
+
+function currentEventsForDay(pack, win) {
+  if (!pack) return [];
+  const out = [];
+  const s = pack.series;
+  for (const sl of findSlacks(s, win))
+    out.push({ t: sl.t, label: sl.becoming === 'FLOOD' ? 'Slack before flood' : 'Slack before ebb',
+               value: 0, unit: 'kt', cls: 'slack' });
+  // Local maxima and minima, not just the single strongest of the day.
+  for (let i = 1; i < s.length - 1; i++) {
+    const p = s[i - 1].signedKts, c = s[i].signedKts, n = s[i + 1].signedKts;
+    if (p == null || c == null || n == null) continue;
+    if (s[i].t < win.start || s[i].t > win.end) continue;
+    if (c > 0 && c >= p && c >= n && c > 0.1)
+      out.push({ t: s[i].t, label: 'Max flood', value: c, unit: 'kt', cls: 'flood' });
+    if (c < 0 && c <= p && c <= n && c < -0.1)
+      out.push({ t: s[i].t, label: 'Max ebb', value: c, unit: 'kt', cls: 'ebb' });
+  }
+  return out.sort((a, b) => a.t - b.t);
+}
+
+/* ---- graph ---- */
+function tcGraph(pack, win, field, opts) {
+  if (!pack || !pack.series.length) return '';
+  const pts = pack.series.filter(r => r.t >= win.start - HOUR && r.t <= win.end + HOUR && r[field] != null);
+  if (pts.length < 2) return '';
+  const W = 600, H = 150, PAD = 22;
+  const vals = pts.map(p => p[field]);
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  if (opts.zeroLine) { const m = Math.max(Math.abs(lo), Math.abs(hi)); lo = -m; hi = m; }
+  const pad = (hi - lo) * 0.12 || 0.5;
+  lo -= pad; hi += pad;
+  const x = t => PAD + (t - win.start) / (win.end - win.start) * (W - 2 * PAD);
+  const y = v => H - PAD - (v - lo) / (hi - lo) * (H - 2 * PAD);
+  const path = pts.map((p, i) => `${i ? 'L' : 'M'}${x(p.t).toFixed(1)},${y(p[field]).toFixed(1)}`).join('');
+
+  let bands = '';
+  if (opts.zeroLine) {
+    // shade flood above the zero line, ebb below, so the two read apart at a glance
+    const y0 = y(0);
+    bands = `<path d="${path}L${x(pts[pts.length-1].t).toFixed(1)},${y0.toFixed(1)}L${x(pts[0].t).toFixed(1)},${y0.toFixed(1)}Z"
+      fill="url(#fe)" opacity=".18"/>
+      <line x1="${PAD}" y1="${y0}" x2="${W-PAD}" y2="${y0}" stroke="var(--dim)" stroke-width="1" stroke-dasharray="3 3"/>
+      <text x="${W-PAD}" y="${y0-5}" fill="var(--faint)" font-size="10" text-anchor="end">slack</text>`;
+  }
+
+  const ticks = [];
+  for (let h = 0; h <= 24; h += 6) {
+    const t = win.start + h * HOUR;
+    ticks.push(`<line x1="${x(t)}" y1="${PAD-6}" x2="${x(t)}" y2="${H-PAD}" stroke="var(--line-soft)"/>
+      <text x="${x(t)}" y="${H-6}" fill="var(--faint)" font-size="10" text-anchor="middle">${fmtClock(t, TZ())}</text>`);
+  }
+
+  const now = Date.now();
+  const nowLine = (now >= win.start && now <= win.end)
+    ? `<line x1="${x(now)}" y1="${PAD-6}" x2="${x(now)}" y2="${H-PAD}" stroke="var(--info)" stroke-width="1.5"/>
+       <text x="${x(now)+4}" y="${PAD+2}" fill="var(--info)" font-size="10">now</text>` : '';
+
+  const marks = (opts.events || []).filter(e => e.t >= win.start && e.t <= win.end).map(e => {
+    const v = opts.zeroLine ? e.value : e.value;
+    return `<circle cx="${x(e.t).toFixed(1)}" cy="${y(v).toFixed(1)}" r="3"
+      fill="${e.cls === 'ebb' ? 'var(--port)' : e.cls === 'flood' ? 'var(--stbd)' : 'var(--ink)'}"/>`;
+  }).join('');
+
+  const sel = opts.markTime && opts.markTime >= win.start && opts.markTime <= win.end
+    ? `<line x1="${x(opts.markTime)}" y1="${PAD-6}" x2="${x(opts.markTime)}" y2="${H-PAD}"
+        stroke="var(--caution)" stroke-width="1.5" stroke-dasharray="4 3"/>` : '';
+
+  return `<svg class="tcgraph" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+    <defs><linearGradient id="fe" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="var(--stbd)"/><stop offset="100%" stop-color="var(--port)"/>
+    </linearGradient></defs>
+    ${ticks.join('')}${bands}
+    <path d="${path}" fill="none" stroke="var(--ink)" stroke-width="1.8" stroke-linejoin="round"/>
+    ${marks}${nowLine}${sel}
+  </svg>`;
+}
+
+/* ---- exact-time answer ---- */
+function tcCalculate(pack, kind, epoch) {
+  if (!pack) return null;
+  const s = sampleSeries(pack.series, epoch);
+  if (!s) return { outside: true };
+  const field = kind === 'tide' ? 'heightFt' : 'signedKts';
+  const value = lerpNum(s.a[field], s.b ? s.b[field] : null, s.f);
+
+  // Trend from the local gradient rather than from the nearest extreme, so a
+  // moment just past a turn reads correctly.
+  const step = 15 * MIN;
+  const before = sampleSeries(pack.series, epoch - step);
+  const after = sampleSeries(pack.series, epoch + step);
+  const vb = before ? lerpNum(before.a[field], before.b ? before.b[field] : null, before.f) : null;
+  const va = after ? lerpNum(after.a[field], after.b ? after.b[field] : null, after.f) : null;
+  let trend = 'steady';
+  if (vb != null && va != null) {
+    const d = va - vb;
+    if (kind === 'tide') trend = Math.abs(d) < 0.02 ? 'near slack water' : (d > 0 ? 'rising' : 'falling');
+    else {
+      const mag = Math.abs(va) - Math.abs(vb);
+      trend = Math.abs(value) < 0.1 ? 'slack' : (mag > 0 ? 'increasing' : 'decreasing');
+    }
+  }
+
+  const wide = { start: epoch - 18 * HOUR, end: epoch + 18 * HOUR };
+  const events = kind === 'tide'
+    ? tideEventsForDay(pack, wide) : currentEventsForDay(pack, wide);
+  const prev = events.filter(e => e.t <= epoch).pop() || null;
+  const next = events.find(e => e.t > epoch) || null;
+
+  let peak = null;
+  if (kind === 'current' && next) {
+    const upcoming = events.filter(e => e.t > epoch && e.label.startsWith('Max'));
+    peak = upcoming[0] || null;
+  }
+  return { value, trend, prev, next, peak, epoch, station: pack.source };
+}
+
+function tcDescribeCurrent(v) {
+  if (v == null) return '—';
+  if (Math.abs(v) < 0.1) return 'SLACK';
+  return `${Math.abs(v).toFixed(1)} kt ${v > 0 ? 'FLOOD' : 'EBB'}`;
+}
+
+async function renderTides() {
+  const kind = TC.kind;
+  if (!TC.date) TC.date = tcDefaultDate();
+  const list = tcStations(kind);
+  if (!list.length) {
+    $('#viewTides').innerHTML = `<p class="eyebrow">Tides &amp; Currents</p>
+      <div class="mockbar"><b>No stations</b><br>No ${kind} station is configured.</div>`;
+    return;
+  }
+  if (!TC.stationId || !list.some(g => g.id === TC.stationId)) TC.stationId = list[0].id;
+
+  $('#viewTides').innerHTML = `<p class="eyebrow">Tides &amp; Currents</p>
+    <div class="uw">Loading NOAA predictions…</div>`;
+  await tcLoad();
+
+  const g = list.find(x => x.id === TC.stationId);
+  const pack = tcPack();
+  const win = tcDayWindow();
+  const events = pack ? (kind === 'tide' ? tideEventsForDay(pack, win) : currentEventsForDay(pack, win)) : [];
+  const stationCode = kind === 'tide' ? g.tide : g.current;
+
+  const rows = events.length ? events.map(e => `<div class="tcrow">
+      <span class="tm">${fmtClock(e.t, TZ())}</span>
+      <span class="ev ${e.cls}">${esc(e.label)}</span>
+      <span class="vl ${e.cls}">${kind === 'tide'
+        ? (e.value >= 0 ? '+' : '') + e.value.toFixed(2) + ' ft'
+        : (e.cls === 'slack' ? '0.0 kt' : (e.value > 0 ? '+' : '') + e.value.toFixed(1) + ' kt')}</span>
+    </div>`).join('')
+    : `<p class="gapnote">${TC.error ? 'Data unavailable — ' + esc(TC.error) : 'No events for this day.'}</p>`;
+
+  const calcTime = TC.calc.time || '12:00';
+  const [ch, cm] = calcTime.split(':').map(Number);
+  const [cy, cmo, cd] = TC.date.split('-').map(Number);
+  const calcEpoch = wallToEpoch(cy, cmo, cd, ch || 0, cm || 0, TZ());
+  const res = pack ? tcCalculate(pack, kind, calcEpoch) : null;
+
+  const untilTxt = t => {
+    const d = t - calcEpoch;
+    return d > 0 ? fmtDuration(d) : '—';
+  };
+
+  $('#viewTides').innerHTML = `
+    <div class="seg" style="margin-bottom:14px">
+      <button type="button" data-k="tide"${kind === 'tide' ? ' class="on"' : ''}>Tides</button>
+      <button type="button" data-k="current"${kind === 'current' ? ' class="on"' : ''}>Currents</button>
+    </div>
+
+    <div class="field"><label for="tcStation">Station</label>
+      <select class="control" id="tcStation">${list.map(x =>
+        `<option value="${x.id}"${x.id === TC.stationId ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select></div>
+    <div class="field"><label for="tcDate">Date</label>
+      <input class="control" type="date" id="tcDate" value="${esc(TC.date)}"></div>
+
+    <div class="stationmeta">
+      NOAA station <b style="color:var(--ink)">${esc(String(stationCode))}</b> ·
+      ${g.lat.toFixed(4)}, ${g.lon.toFixed(4)} ·
+      ${kind === 'tide' ? 'water level, predicted, MLLW' : 'current, predicted'} ·
+      ${g.chainNm.toFixed(1)} nm along the channel<br>
+      ${pack ? `Source: ${esc(pack.source)} · retrieved ${fmtClock(pack.retrieved, TZ())}
+        <span class="badge ${pack.quality === 'MOCK' ? 'mock' : pack.quality === 'CACHED' ? 'stale' : 'gap'}">${esc(pack.quality)}</span>`
+        : '<span class="badge stale">DATA UNAVAILABLE</span>'}<br>
+      All times ${esc(TZ().split('/')[1].replace('_', ' '))} local.
+    </div>
+
+    ${pack ? tcGraph(pack, win, kind === 'tide' ? 'heightFt' : 'signedKts',
+        { zeroLine: kind === 'current', events, markTime: calcEpoch }) : ''}
+
+    <div class="rule"></div>
+    <p class="eyebrow">${kind === 'tide' ? 'Tide predictions' : 'Current predictions'}</p>
+    ${rows}
+
+    <div class="rule"></div>
+    <p class="eyebrow">Tide &amp; current calculator</p>
+    <div class="calcbox">
+      <div class="field" style="margin-bottom:0"><label for="tcTime">Time on ${esc(TC.date)}</label>
+        <input class="control" type="time" id="tcTime" value="${esc(calcTime)}"></div>
+      ${!res ? '<p class="gapnote" style="margin-top:12px">Data unavailable.</p>'
+       : res.outside ? '<p class="gapnote" style="margin-top:12px">Outside the predicted range for this station.</p>'
+       : `<div class="calcres">
+        <div class="cell"><div class="k">${kind === 'tide' ? 'Height' : 'Current'}</div>
+          <div class="v">${kind === 'tide'
+            ? (res.value >= 0 ? '+' : '') + res.value.toFixed(2) + ' ft'
+            : tcDescribeCurrent(res.value)}</div>
+          <div class="s">${kind === 'tide' ? 'MLLW' : 'positive = flood, upriver'}</div></div>
+        <div class="cell"><div class="k">Trend</div>
+          <div class="v" style="font-size:17px">${esc(res.trend.toUpperCase())}</div>
+          <div class="s">at ${fmtClock(calcEpoch, TZ())}</div></div>
+        <div class="cell"><div class="k">Previous</div>
+          <div class="v" style="font-size:16px">${res.prev ? fmtClock(res.prev.t, TZ()) : '—'}</div>
+          <div class="s">${res.prev ? esc(res.prev.label) + ' ' + (kind === 'tide'
+            ? res.prev.value.toFixed(2) + ' ft' : Math.abs(res.prev.value).toFixed(1) + ' kt') : 'none in range'}</div></div>
+        <div class="cell"><div class="k">Next</div>
+          <div class="v" style="font-size:16px">${res.next ? fmtClock(res.next.t, TZ()) : '—'}</div>
+          <div class="s">${res.next ? esc(res.next.label) + ' · in ' + untilTxt(res.next.t) : 'none in range'}</div></div>
+        ${res.peak ? `<div class="cell wide"><div class="k">Next maximum</div>
+          <div class="v" style="font-size:17px">${Math.abs(res.peak.value).toFixed(1)} kt ${res.peak.value > 0 ? 'flood' : 'ebb'}</div>
+          <div class="s">${fmtClock(res.peak.t, TZ())} · in ${untilTxt(res.peak.t)}</div></div>` : ''}
+      </div>`}
+    </div>
+
+    <div class="foot">
+      Predictions from NOAA CO-OPS for this station only — no blending between stations
+      on this tab. The transit brief interpolates between gauges and will differ slightly
+      away from a station.<br><br>
+      Decision support only. Verify against official sources.
+    </div>`;
+
+  document.querySelectorAll('#viewTides .seg button').forEach(b =>
+    b.addEventListener('click', () => { TC.kind = b.dataset.k; TC.stationId = null; renderTides(); }));
+  $('#tcStation').addEventListener('change', e => { TC.stationId = e.target.value; renderTides(); });
+  $('#tcDate').addEventListener('change', e => { TC.date = e.target.value; renderTides(); });
+  $('#tcTime').addEventListener('change', e => { TC.calc.time = e.target.value; renderTides(); });
+}
+
 /* ---------- navigation ---------- */
 function show(id) {
   document.querySelectorAll('.view').forEach(v => v.classList.toggle('on', v.id === id));
   window.scrollTo(0, 0);
   $('#navBtn').textContent = id === 'viewAdmin' ? 'Close' : 'Setup';
+  $('#tabs').classList.toggle('hide', id === 'viewAdmin');
+  document.querySelectorAll('#tabs button').forEach(b =>
+    b.classList.toggle('on', b.dataset.tab === id ||
+      (b.dataset.tab === 'viewPlan' && id === 'viewBrief')));
 }
+
+document.querySelectorAll('#tabs button').forEach(b => b.addEventListener('click', () => {
+  const id = b.dataset.tab;
+  if (id === 'viewTides') { renderTides(); show('viewTides'); }
+  else show(LAST ? 'viewBrief' : 'viewPlan');
+}));
 $('#navBtn').addEventListener('click', () => {
   if ($('#viewAdmin').classList.contains('on')) show('viewPlan');
   else { renderAdmin(); show('viewAdmin'); }
