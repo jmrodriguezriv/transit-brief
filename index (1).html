@@ -1,0 +1,5388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#060B10">
+<title>Transit Brief</title>
+<style>
+:root{
+  --sea:#060B10; --hull:#0E1720; --deck:#16222E; --raise:#1D2C3A;
+  --line:#223243; --line-soft:#18242F;
+  --ink:#E9F1F7; --dim:#8FA5B8; --faint:#5C7185;
+  --stbd:#35B37E; --port:#E05A52; --caution:#E6A93C; --info:#4E9AD4;
+  --mock:#8B6FE0;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0}
+body{
+  background:var(--sea); color:var(--ink); font-family:var(--sans);
+  font-size:16px; line-height:1.45; font-variant-numeric:tabular-nums;
+  padding-bottom:env(safe-area-inset-bottom);
+  -webkit-text-size-adjust:100%;
+}
+button,select,input{font-family:inherit;font-size:inherit;color:inherit;font-variant-numeric:tabular-nums}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+
+/* ---- chrome ---- */
+.top{
+  position:sticky;top:0;z-index:40;background:rgba(6,11,16,.94);
+  backdrop-filter:blur(12px);border-bottom:1px solid var(--line);
+  padding:calc(env(safe-area-inset-top) + 10px) 16px 10px;
+  display:flex;align-items:center;gap:12px;
+}
+.mark{
+  width:26px;height:26px;flex:0 0 26px;border:1.5px solid var(--stbd);
+  border-radius:50%;position:relative;
+}
+.mark::after{
+  content:"";position:absolute;left:50%;top:3px;bottom:3px;width:1.5px;
+  background:var(--stbd);transform:translateX(-50%) rotate(22deg);transform-origin:center;
+}
+.top h1{font-size:15px;font-weight:640;margin:0;letter-spacing:-.01em;flex:1}
+.top h1 small{display:block;font-size:10px;font-weight:600;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);margin-top:1px}
+.iconbtn{
+  background:none;border:1px solid var(--line);border-radius:8px;
+  color:var(--dim);padding:7px 11px;font-size:11px;font-weight:600;
+  letter-spacing:.1em;text-transform:uppercase;cursor:pointer;
+}
+.iconbtn:active{background:var(--deck)}
+
+.wrap{padding:18px 16px 80px;max-width:640px;margin:0 auto}
+.view{display:none}
+.view.on{display:block}
+
+/* ---- typographic devices ---- */
+.eyebrow{
+  font-size:10px;font-weight:700;letter-spacing:.19em;text-transform:uppercase;
+  color:var(--faint);margin:0 0 8px;
+}
+.rule{height:1px;background:var(--line-soft);margin:22px 0}
+
+/* ---- form ---- */
+.field{margin-bottom:14px}
+.field label{
+  display:block;font-size:10px;font-weight:700;letter-spacing:.17em;
+  text-transform:uppercase;color:var(--faint);margin-bottom:6px;
+}
+.control{
+  width:100%;background:var(--hull);border:1px solid var(--line);
+  border-radius:10px;padding:14px 13px;font-size:17px;font-weight:500;
+  appearance:none;-webkit-appearance:none;
+}
+select.control{
+  background-image:linear-gradient(45deg,transparent 50%,var(--dim) 50%),
+    linear-gradient(135deg,var(--dim) 50%,transparent 50%);
+  background-position:calc(100% - 19px) 50%,calc(100% - 13px) 50%;
+  background-size:6px 6px,6px 6px;background-repeat:no-repeat;padding-right:38px;
+}
+.control:focus{outline:none;border-color:var(--info);box-shadow:0 0 0 3px rgba(78,154,212,.16)}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.swap{
+  display:flex;align-items:center;gap:10px;margin:-4px 0 12px;
+}
+.swap button{
+  background:var(--hull);border:1px solid var(--line);border-radius:8px;
+  color:var(--dim);padding:5px 10px;font-size:11px;font-weight:600;
+  letter-spacing:.09em;text-transform:uppercase;cursor:pointer;
+}
+.swap .dirtag{
+  font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--info);
+}
+details.opt{border-top:1px solid var(--line-soft);margin-top:18px;padding-top:14px}
+details.opt summary{
+  list-style:none;cursor:pointer;font-size:10px;font-weight:700;
+  letter-spacing:.17em;text-transform:uppercase;color:var(--faint);
+}
+details.opt summary::-webkit-details-marker{display:none}
+details.opt summary::after{content:"  +";color:var(--faint)}
+details.opt[open] summary::after{content:"  −"}
+details.opt .inner{padding-top:16px}
+
+.uw{border:1px solid var(--line);border-radius:11px;background:var(--hull);padding:13px}
+.uline{display:flex;justify-content:space-between;gap:12px;align-items:baseline;
+  padding:6px 0;border-bottom:1px solid var(--line-soft)}
+.uline:last-of-type{border-bottom:none}
+.uline .k{font-size:10px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--faint);flex:0 0 auto}
+.uline .v{font-size:14px;font-weight:600;text-align:right}
+input.spd{width:62px;background:var(--deck);border:1px solid var(--line);border-radius:7px;
+  color:var(--ink);padding:6px 8px;font-size:13px;text-align:right;font-family:var(--mono)}
+input.spd:focus{outline:none;border-color:var(--info)}
+.seg{display:flex;gap:6px}
+.seg button{
+  flex:1;background:var(--hull);border:1px solid var(--line);border-radius:10px;
+  color:var(--dim);padding:13px 8px;font-size:14px;font-weight:600;cursor:pointer;
+}
+.seg button.on{background:var(--deck);border-color:var(--stbd);color:var(--ink)}
+.generate{
+  width:100%;margin-top:24px;padding:19px;border:none;border-radius:12px;
+  background:var(--stbd);color:#04150D;font-size:15px;font-weight:750;
+  letter-spacing:.13em;text-transform:uppercase;cursor:pointer;
+}
+.generate:active{background:#2b8f66}
+
+/* ---- brief header ---- */
+.headline{
+  border:1px solid var(--line);border-radius:14px;background:var(--hull);
+  padding:16px;margin-bottom:14px;
+}
+.headline .route{
+  font-size:12px;font-weight:600;letter-spacing:.04em;color:var(--dim);
+  margin-bottom:14px;line-height:1.5;
+}
+.headline .route b{color:var(--ink);font-weight:650}
+.tri{display:grid;grid-template-columns:1fr 1fr 1fr;gap:2px;text-align:left}
+.tri>div{padding-right:8px}
+.tri .k{font-size:9px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;color:var(--faint)}
+.tri .v{font-family:var(--mono);font-size:27px;font-weight:600;line-height:1.15;margin-top:3px}
+.tri .v.hero{color:var(--stbd)}
+.tri .s{font-size:11px;color:var(--faint);margin-top:1px}
+
+/* ---- ladder card ---- */
+.ladder{
+  border:1px solid var(--line);border-left:4px solid var(--line);
+  border-radius:12px;background:var(--hull);padding:15px 16px;margin-bottom:14px;
+}
+.ladder.stbd{border-left-color:var(--stbd)}
+.ladder.port{border-left-color:var(--port)}
+.ladder.mixed{border-left-color:var(--caution)}
+.ladder .side{
+  font-size:26px;font-weight:750;letter-spacing:-.01em;margin:2px 0 2px;
+}
+.ladder.stbd .side{color:var(--stbd)}
+.ladder.port .side{color:var(--port)}
+.ladder.mixed .side{color:var(--caution);font-size:19px;line-height:1.25}
+.ladder .why{font-size:13px;color:var(--dim);line-height:1.5;margin-top:6px}
+.ladder .disc{
+  font-size:11px;color:var(--faint);margin-top:11px;padding-top:10px;
+  border-top:1px solid var(--line-soft);line-height:1.45;
+}
+.showwork{
+  background:none;border:1px solid var(--line);border-radius:7px;color:var(--dim);
+  padding:6px 11px;font-size:10px;font-weight:700;letter-spacing:.12em;
+  text-transform:uppercase;margin-top:11px;cursor:pointer;
+}
+.work{margin-top:12px;border-top:1px solid var(--line-soft);padding-top:11px;display:none}
+.work.on{display:block}
+.work table{width:100%;border-collapse:collapse;font-size:12px}
+.work td{padding:5px 0;border-bottom:1px solid var(--line-soft);color:var(--dim)}
+.work td:last-child{text-align:right;color:var(--ink);font-family:var(--mono)}
+.work tr:last-child td{border-bottom:none}
+
+/* ---- alerts ---- */
+.alert{
+  display:flex;gap:11px;align-items:flex-start;border:1px solid var(--line);
+  border-radius:10px;background:var(--hull);padding:12px 13px;margin-bottom:8px;
+}
+.alert .bar{width:3px;align-self:stretch;border-radius:2px;background:var(--caution);flex:0 0 3px}
+.alert.info .bar{background:var(--info)}
+.alert .t{font-size:11px;font-weight:750;letter-spacing:.13em;text-transform:uppercase;color:var(--caution)}
+.alert.info .t{color:var(--info)}
+.alert .d{font-size:13px;color:var(--dim);margin-top:3px;line-height:1.45}
+
+/* ---- key conditions grid ---- */
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:6px}
+.cell{border:1px solid var(--line);border-radius:11px;background:var(--hull);padding:12px 13px}
+.cell .k{font-size:9px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;color:var(--faint)}
+.cell .v{font-family:var(--mono);font-size:20px;font-weight:600;margin-top:4px;line-height:1.2}
+.cell .s{font-size:11.5px;color:var(--dim);margin-top:4px;line-height:1.4}
+.cell.wide{grid-column:1/-1}
+
+/* ---- the ribbon: signature element ---- */
+.ribbon{position:relative;margin:6px 0 0;padding-left:30px}
+.ribbon::before{
+  content:"";position:absolute;left:8px;top:8px;bottom:8px;width:2px;
+  background:linear-gradient(180deg,var(--line) 0%,var(--raise) 12%,var(--raise) 88%,var(--line) 100%);
+}
+.stop{position:relative;padding:0 0 20px}
+.stop::before{
+  content:"";position:absolute;left:-26px;top:6px;width:9px;height:9px;
+  border-radius:50%;background:var(--sea);border:2px solid var(--dim);
+}
+.stop.major::before{border-color:var(--ink);background:var(--ink)}
+.stop.turn::before{border-radius:1px;transform:rotate(45deg)}
+.stop.term::before{border-color:var(--stbd);background:var(--stbd);width:11px;height:11px;left:-27px}
+.stop .time{font-family:var(--mono);font-size:16px;font-weight:600;letter-spacing:-.01em}
+.stop .name{font-size:13.5px;font-weight:600;color:var(--ink);margin-top:1px}
+.stop .meta{font-size:12px;color:var(--dim);margin-top:4px;line-height:1.55}
+.stop .meta .sep{color:var(--faint);padding:0 5px}
+.stop.evt::before{
+  border-color:var(--caution);background:var(--sea);width:7px;height:7px;left:-25px;top:8px;
+}
+.stop.evt .time{font-size:14px;color:var(--caution)}
+.stop.evt .name{font-size:12px;font-weight:700;letter-spacing:.11em;text-transform:uppercase;color:var(--caution)}
+.stop.evt .meta{font-size:12px}
+.stop.tideevt::before{border-color:var(--info)}
+.stop.tideevt .time,.stop.tideevt .name{color:var(--info)}
+
+/* ---- badges & sources ---- */
+.badge{
+  display:inline-block;font-size:9px;font-weight:750;letter-spacing:.13em;
+  text-transform:uppercase;padding:2.5px 7px;border-radius:4px;vertical-align:2px;
+}
+.badge.mock{background:rgba(139,111,224,.16);color:var(--mock);border:1px solid rgba(139,111,224,.4)}
+.badge.stale{background:rgba(230,169,60,.14);color:var(--caution);border:1px solid rgba(230,169,60,.4)}
+.badge.gap{background:rgba(92,113,133,.16);color:var(--faint);border:1px solid var(--line)}
+.mockbar{
+  border:1px solid rgba(139,111,224,.4);background:rgba(139,111,224,.09);
+  border-radius:10px;padding:11px 13px;margin-bottom:14px;
+  font-size:12px;color:#C3B2F0;line-height:1.5;
+}
+.mockbar b{color:var(--mock);font-weight:750;letter-spacing:.1em;text-transform:uppercase;font-size:10.5px}
+.src{display:flex;justify-content:space-between;gap:10px;padding:9px 0;border-bottom:1px solid var(--line-soft);font-size:12px}
+.src:last-child{border-bottom:none}
+.src .n{color:var(--dim)}
+.src .st{font-family:var(--mono);font-size:11px;color:var(--faint);text-align:right}
+.gapnote{font-size:12px;color:var(--faint);font-style:italic}
+
+/* ---- admin ---- */
+.adminsec{margin-bottom:26px}
+table.data{width:100%;border-collapse:collapse;font-size:12px}
+table.data th{
+  text-align:left;font-size:9px;font-weight:700;letter-spacing:.13em;
+  text-transform:uppercase;color:var(--faint);padding:6px 6px 6px 0;
+  border-bottom:1px solid var(--line);
+}
+table.data td{padding:7px 6px 7px 0;border-bottom:1px solid var(--line-soft);color:var(--dim)}
+table.data td.n{font-family:var(--mono);color:var(--ink);text-align:right}
+textarea.control{min-height:190px;font-family:var(--mono);font-size:12px;line-height:1.5}
+.testout{
+  font-family:var(--mono);font-size:11.5px;line-height:1.65;background:var(--hull);
+  border:1px solid var(--line);border-radius:10px;padding:13px;margin-top:12px;
+  white-space:pre-wrap;max-height:340px;overflow:auto;
+}
+.testout .p{color:var(--stbd)} .testout .f{color:var(--port)}
+.btn{
+  background:var(--deck);border:1px solid var(--line);border-radius:9px;color:var(--ink);
+  padding:12px 16px;font-size:12px;font-weight:700;letter-spacing:.12em;
+  text-transform:uppercase;cursor:pointer;margin-right:8px;margin-bottom:8px;
+}
+.btn:active{background:var(--raise)}
+.btn.danger{color:var(--port);border-color:rgba(224,90,82,.4)}
+
+.foot{
+  margin-top:34px;padding-top:16px;border-top:1px solid var(--line-soft);
+  font-size:11.5px;color:var(--faint);line-height:1.6;
+}
+.backbtn{
+  background:none;border:none;color:var(--dim);padding:0 0 14px;font-size:12px;
+  font-weight:700;letter-spacing:.12em;text-transform:uppercase;cursor:pointer;
+}
+@media (prefers-reduced-motion:no-preference){
+  .stop{animation:rise .34s cubic-bezier(.22,.9,.3,1) backwards}
+  @keyframes rise{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
+}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="mark" aria-hidden="true"></div>
+  <h1>Transit Brief<small id="portname">Calcasieu Ship Channel</small></h1>
+  <button class="iconbtn" id="navBtn">Setup</button>
+</header>
+
+<main class="wrap">
+  <section class="view on" id="viewPlan"></section>
+  <section class="view" id="viewBrief"></section>
+  <section class="view" id="viewAdmin"></section>
+</main>
+
+<script>
+/* ==== CHANNEL DATA (NOAA ENC derived) ==== */
+var CHANNEL_DATA = {
+ "meta": {
+  "name": "Calcasieu Ship Channel",
+  "timezone": "America/Chicago",
+  "source": "NOAA ENC Direct (aids to navigation), berth pins supplied by pilot",
+  "verified": false
+ },
+ "letGoMinutes": 20,
+ "disembarkMinutes": 6,
+ "seawardNodeId": "MK_1_2",
+ "chainLengthNm": 57.861,
+ "gauges": [
+  {
+   "id": "G_LB36",
+   "name": "Calcasieu Ch LB 36",
+   "at": "MK_35_36",
+   "tide": null,
+   "current": null,
+   "currentObs": "lc0101",
+   "chainNm": 21.566,
+   "lat": 29.693367,
+   "lon": -93.332655
+  },
+  {
+   "id": "G_PASS",
+   "name": "Calcasieu Pass",
+   "at": "MK_47_48",
+   "tide": "8768094",
+   "current": null,
+   "chainNm": 26.016,
+   "lat": 29.766727,
+   "lon": -93.344896
+  },
+  {
+   "id": "G_PIER",
+   "name": "Cameron Fishing Pier",
+   "at": "MK_50",
+   "tide": null,
+   "current": "lc0201",
+   "currentObs": "lc0201",
+   "chainNm": 26.709,
+   "lat": 29.778262,
+   "lon": -93.344532
+  },
+  {
+   "id": "G_BT",
+   "name": "Bulk Terminal",
+   "at": "BT1",
+   "tide": "8767961",
+   "current": null,
+   "chainNm": 51.726,
+   "lat": 30.182572,
+   "lon": -93.30773
+  },
+  {
+   "id": "G_LC",
+   "name": "Lake Charles City Docks",
+   "at": "CD",
+   "tide": "8767816",
+   "current": "lc0301",
+   "currentObs": "lc0301",
+   "chainNm": 55.923,
+   "lat": 30.219212,
+   "lon": -93.254362
+  }
+ ],
+ "nodes": [
+  {
+   "id": "MK_1_2",
+   "name": "Buoy 1/2",
+   "lon": -93.222075,
+   "lat": 29.363679,
+   "type": "PILOT_STATION",
+   "chainNm": 0.0,
+   "stations": {
+    "weather": "W_OFFSHORE",
+    "wave": "V_OFFSHORE",
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_1A_2A",
+   "name": "Light/Buoy 1A/2A",
+   "lon": -93.222521,
+   "lat": 29.380534,
+   "type": "MARK",
+   "chainNm": 1.012,
+   "stations": {
+    "weather": "W_OFFSHORE",
+    "wave": "V_OFFSHORE",
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_2B",
+   "name": "Buoy 2B",
+   "lon": -93.222057,
+   "lat": 29.455698,
+   "type": "PILOT_STATION",
+   "chainNm": 5.525,
+   "stations": {
+    "weather": "W_OFFSHORE",
+    "wave": "V_OFFSHORE",
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_3_4",
+   "name": "Light/Buoy 3/4",
+   "lon": -93.224203,
+   "lat": 29.483033,
+   "type": "MARK",
+   "chainNm": 7.17,
+   "stations": {
+    "weather": "W_OFFSHORE",
+    "wave": "V_OFFSHORE",
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_5_6",
+   "name": "Light/Buoy 5/6",
+   "lon": -93.224538,
+   "lat": 29.500265,
+   "type": "MARK",
+   "chainNm": 8.205,
+   "stations": {
+    "weather": "W_OFFSHORE",
+    "wave": "V_OFFSHORE",
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_7_8",
+   "name": "Buoy 8",
+   "lon": -93.225392,
+   "lat": 29.516754,
+   "type": "PILOT_STATION",
+   "chainNm": 9.196,
+   "stations": {
+    "weather": "W_OFFSHORE",
+    "wave": "V_OFFSHORE",
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_9",
+   "name": "Light/Buoy 9",
+   "lon": -93.228865,
+   "lat": 29.520789,
+   "type": "MARK",
+   "chainNm": 9.499,
+   "stations": {
+    "weather": "W_OFFSHORE",
+    "wave": "V_OFFSHORE",
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_11_12",
+   "name": "Light/Buoy 11/12",
+   "lon": -93.236889,
+   "lat": 29.532044,
+   "type": "MARK",
+   "chainNm": 10.294,
+   "stations": {
+    "weather": "W_OFFSHORE",
+    "wave": "V_OFFSHORE",
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_14",
+   "name": "Buoy 14",
+   "lon": -93.247904,
+   "lat": 29.546482,
+   "type": "PILOT_STATION",
+   "chainNm": 11.334,
+   "stations": {
+    "weather": "W_OFFSHORE",
+    "wave": "V_OFFSHORE",
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_15_16",
+   "name": "Light/Buoy 15/16",
+   "lon": -93.261031,
+   "lat": 29.558795,
+   "type": "MARK",
+   "chainNm": 12.343,
+   "stations": {
+    "weather": "W_OFFSHORE",
+    "wave": "V_OFFSHORE",
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_18",
+   "name": "Buoy 18",
+   "lon": -93.271896,
+   "lat": 29.572951,
+   "type": "PILOT_STATION",
+   "chainNm": 13.365,
+   "stations": {
+    "weather": "W_OFFSHORE",
+    "wave": "V_OFFSHORE",
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_19_20",
+   "name": "Light/Buoy 19/20",
+   "lon": -93.285044,
+   "lat": 29.585344,
+   "type": "MARK",
+   "chainNm": 14.377,
+   "stations": {
+    "weather": "W_OFFSHORE",
+    "wave": "V_OFFSHORE",
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_22",
+   "name": "Buoy 22",
+   "lon": -93.295976,
+   "lat": 29.59963,
+   "type": "PILOT_STATION",
+   "chainNm": 15.407,
+   "stations": {
+    "weather": "W_OFFSHORE",
+    "wave": "V_OFFSHORE",
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_23_24",
+   "name": "Light/Buoy 23/24",
+   "lon": -93.309087,
+   "lat": 29.611892,
+   "type": "MARK",
+   "chainNm": 16.412,
+   "stations": {
+    "weather": "W_OFFSHORE",
+    "wave": "V_OFFSHORE",
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_27_28",
+   "name": "Light/Buoy 27/28",
+   "lon": -93.32115,
+   "lat": 29.625256,
+   "type": "MARK",
+   "chainNm": 17.432,
+   "stations": {
+    "weather": "W_OFFSHORE",
+    "wave": "V_OFFSHORE",
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_29_30",
+   "name": "Buoy 30",
+   "lon": -93.3246,
+   "lat": 29.644289,
+   "type": "PILOT_STATION",
+   "chainNm": 18.589,
+   "stations": {
+    "weather": "W_OFFSHORE",
+    "wave": "V_OFFSHORE",
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_31_32",
+   "name": "Light/Buoy 31/32",
+   "lon": -93.327219,
+   "lat": 29.66014,
+   "type": "MARK",
+   "chainNm": 19.551,
+   "stations": {
+    "weather": "W_OFFSHORE",
+    "wave": "V_OFFSHORE",
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_33_34",
+   "name": "Light/Buoy 33/34",
+   "lon": -93.329934,
+   "lat": 29.676799,
+   "type": "MARK",
+   "chainNm": 20.561,
+   "stations": {
+    "weather": "W_OFFSHORE",
+    "wave": "V_OFFSHORE",
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_35_36",
+   "name": "Light/Buoy 35/36",
+   "lon": -93.332655,
+   "lat": 29.693367,
+   "type": "MARK",
+   "chainNm": 21.566,
+   "stations": {
+    "weather": "W_OFFSHORE",
+    "wave": "V_OFFSHORE",
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_37_38",
+   "name": "Light/Buoy 37/38",
+   "lon": -93.33536,
+   "lat": 29.709814,
+   "type": "MARK",
+   "chainNm": 22.563,
+   "stations": {
+    "weather": "W_OFFSHORE",
+    "wave": "V_OFFSHORE",
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_39_40",
+   "name": "Light/Buoy 39/40",
+   "lon": -93.33799,
+   "lat": 29.725735,
+   "type": "MARK",
+   "chainNm": 23.529,
+   "stations": {
+    "weather": "W_OFFSHORE",
+    "wave": "V_OFFSHORE",
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_41_42",
+   "name": "Light/Buoy 41/42",
+   "lon": -93.341099,
+   "lat": 29.744563,
+   "type": "MARK",
+   "chainNm": 24.671,
+   "stations": {
+    "weather": "W_OFFSHORE",
+    "wave": "V_OFFSHORE",
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_47_48",
+   "name": "Light/Buoy 47/48",
+   "lon": -93.344896,
+   "lat": 29.766727,
+   "type": "MARK",
+   "chainNm": 26.016,
+   "stations": {
+    "weather": "W_PASS",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "VG",
+   "name": "VG",
+   "lon": -93.344675,
+   "lat": 29.773716,
+   "type": "BERTH",
+   "wx": [
+    -93.343283,
+    29.773683
+   ],
+   "chainNm": 26.436,
+   "stations": {
+    "weather": "W_PASS",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_50",
+   "name": "Light/Buoy 50",
+   "lon": -93.344532,
+   "lat": 29.778262,
+   "type": "MARK",
+   "chainNm": 26.709,
+   "stations": {
+    "weather": "W_PASS",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_52",
+   "name": "Light/Buoy 52",
+   "lon": -93.34534,
+   "lat": 29.798625,
+   "type": "MARK",
+   "chainNm": 27.932,
+   "stations": {
+    "weather": "W_PASS",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_53",
+   "name": "Light/Buoy 53",
+   "lon": -93.348421,
+   "lat": 29.802622,
+   "type": "MARK",
+   "chainNm": 28.221,
+   "stations": {
+    "weather": "W_PASS",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_56",
+   "name": "Light/Buoy 56",
+   "lon": -93.346886,
+   "lat": 29.821534,
+   "type": "MARK",
+   "chainNm": 29.359,
+   "stations": {
+    "weather": "W_PASS",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_57",
+   "name": "Light/Buoy 57",
+   "lon": -93.349739,
+   "lat": 29.830705,
+   "type": "MARK",
+   "chainNm": 29.93,
+   "stations": {
+    "weather": "W_PASS",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_60",
+   "name": "Light/Buoy 60",
+   "lon": -93.346401,
+   "lat": 29.838749,
+   "type": "MARK",
+   "chainNm": 30.443,
+   "stations": {
+    "weather": "W_PASS",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_61_62",
+   "name": "Light/Buoy 61/62",
+   "lon": -93.346518,
+   "lat": 29.852691,
+   "type": "MARK",
+   "chainNm": 31.28,
+   "stations": {
+    "weather": "W_PASS",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_63_64",
+   "name": "Light/Buoy 63/64",
+   "lon": -93.344885,
+   "lat": 29.869271,
+   "type": "MARK",
+   "chainNm": 32.279,
+   "stations": {
+    "weather": "W_PASS",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_65_66",
+   "name": "Light/Buoy 65/66",
+   "lon": -93.343724,
+   "lat": 29.885659,
+   "type": "MARK",
+   "chainNm": 33.265,
+   "stations": {
+    "weather": "W_PASS",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_67_68",
+   "name": "Light/Buoy 67/68",
+   "lon": -93.342165,
+   "lat": 29.901565,
+   "type": "MARK",
+   "chainNm": 34.223,
+   "stations": {
+    "weather": "W_PASS",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_69_70",
+   "name": "Light/Buoy 69/70",
+   "lon": -93.340904,
+   "lat": 29.915604,
+   "type": "MARK",
+   "chainNm": 35.069,
+   "stations": {
+    "weather": "W_PASS",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_71_72",
+   "name": "Light/Buoy 71/72",
+   "lon": -93.339585,
+   "lat": 29.929458,
+   "type": "MARK",
+   "chainNm": 35.904,
+   "stations": {
+    "weather": "W_PASS",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_73_74",
+   "name": "Light/Buoy 73/74",
+   "lon": -93.33828,
+   "lat": 29.945263,
+   "type": "MARK",
+   "chainNm": 36.855,
+   "stations": {
+    "weather": "W_PASS",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_75_76",
+   "name": "Light/Buoy 75/76",
+   "lon": -93.336861,
+   "lat": 29.960952,
+   "type": "MARK",
+   "chainNm": 37.8,
+   "stations": {
+    "weather": "W_PASS",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_77_78",
+   "name": "Light/Buoy 77/78",
+   "lon": -93.335422,
+   "lat": 29.976409,
+   "type": "MARK",
+   "chainNm": 38.731,
+   "stations": {
+    "weather": "W_PASS",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_79_80",
+   "name": "Light/Buoy 79/80",
+   "lon": -93.333841,
+   "lat": 29.993809,
+   "type": "MARK",
+   "chainNm": 39.779,
+   "stations": {
+    "weather": "W_PASS",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_81_82",
+   "name": "Light/Buoy 81/82",
+   "lon": -93.33267,
+   "lat": 30.007492,
+   "type": "MARK",
+   "chainNm": 40.603,
+   "stations": {
+    "weather": "W_PASS",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_83_84",
+   "name": "Light/Buoy 83/84",
+   "lon": -93.331245,
+   "lat": 30.021978,
+   "type": "MARK",
+   "chainNm": 41.475,
+   "stations": {
+    "weather": "W_PASS",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "CLNG",
+   "name": "CLNG",
+   "lon": -93.329659,
+   "lat": 30.039174,
+   "type": "BERTH",
+   "wx": [
+    -93.3322,
+    30.03935
+   ],
+   "chainNm": 42.511,
+   "stations": {
+    "weather": "W_PASS",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_85_86",
+   "name": "Light/Buoy 85/86",
+   "lon": -93.328823,
+   "lat": 30.048238,
+   "type": "MARK",
+   "chainNm": 43.057,
+   "stations": {
+    "weather": "W_PASS",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_87_88",
+   "name": "Light/Buoy 87/88",
+   "lon": -93.327441,
+   "lat": 30.064134,
+   "type": "MARK",
+   "chainNm": 44.014,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_89_90",
+   "name": "Light/Buoy 89/90",
+   "lon": -93.32607,
+   "lat": 30.077614,
+   "type": "MARK",
+   "chainNm": 44.827,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_91_92",
+   "name": "Light/Buoy 91/92",
+   "lon": -93.32505,
+   "lat": 30.088125,
+   "type": "MARK",
+   "chainNm": 45.46,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "DE_GATE",
+   "name": "Devils Elbow Entrance",
+   "lon": -93.327173,
+   "lat": 30.094713,
+   "type": "JUNCTION",
+   "wx": [
+    -93.318823,
+    30.096727
+   ],
+   "chainNm": 45.871,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_96",
+   "name": "Light/Buoy 96",
+   "lon": -93.332053,
+   "lat": 30.109859,
+   "type": "MARK",
+   "chainNm": 46.815,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_97_98",
+   "name": "Light/Buoy 97/98",
+   "lon": -93.334527,
+   "lat": 30.112602,
+   "type": "MARK",
+   "chainNm": 47.024,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_99_100",
+   "name": "Light/Buoy 99/100",
+   "lon": -93.33434,
+   "lat": 30.116131,
+   "type": "MARK",
+   "chainNm": 47.236,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_101_102",
+   "name": "Light/Buoy 101/102",
+   "lon": -93.332008,
+   "lat": 30.124191,
+   "type": "MARK",
+   "chainNm": 47.735,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_103_104",
+   "name": "Light/Buoy 103/104",
+   "lon": -93.330214,
+   "lat": 30.132873,
+   "type": "MARK",
+   "chainNm": 48.264,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_106",
+   "name": "Light/Buoy 106",
+   "lon": -93.330559,
+   "lat": 30.144859,
+   "type": "MARK",
+   "chainNm": 48.984,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "CII",
+   "name": "CII",
+   "lon": -93.330579,
+   "lat": 30.145147,
+   "type": "BERTH",
+   "wx": [
+    -93.334433,
+    30.14495
+   ],
+   "chainNm": 49.001,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_108",
+   "name": "Light/Buoy 108",
+   "lon": -93.331115,
+   "lat": 30.152994,
+   "type": "MARK",
+   "chainNm": 49.473,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "P66_CR",
+   "name": "P66 Clifton Ridge",
+   "lon": -93.328041,
+   "lat": 30.155407,
+   "type": "BERTH",
+   "wx": [
+    -93.329767,
+    30.15705
+   ],
+   "chainNm": 49.689,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "CS_CR",
+   "name": "Citgo Clifton Ridge",
+   "lon": -93.324781,
+   "lat": 30.157967,
+   "type": "BERTH",
+   "wx": [
+    -93.325883,
+    30.159017
+   ],
+   "chainNm": 49.917,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_109_110",
+   "name": "Light/Buoy 109/110",
+   "lon": -93.320228,
+   "lat": 30.161542,
+   "type": "MARK",
+   "chainNm": 50.237,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "C_S",
+   "name": "Citgo B-D",
+   "lon": -93.316969,
+   "lat": 30.174889,
+   "type": "BERTH",
+   "wx": [
+    -93.3184,
+    30.17515
+   ],
+   "chainNm": 51.056,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_112",
+   "name": "Light/Buoy 112",
+   "lon": -93.316862,
+   "lat": 30.175325,
+   "type": "MARK",
+   "chainNm": 51.082,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "BT1",
+   "name": "Bulk Terminal 1",
+   "lon": -93.30773,
+   "lat": 30.182572,
+   "type": "BERTH",
+   "wx": [
+    -93.30645,
+    30.181367
+   ],
+   "chainNm": 51.726,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_114",
+   "name": "Light/Buoy 114",
+   "lon": -93.305387,
+   "lat": 30.184431,
+   "type": "MARK",
+   "chainNm": 51.891,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "A4",
+   "name": "A4 Anchorage",
+   "lon": -93.297544,
+   "lat": 30.19088,
+   "type": "ANCHORAGE",
+   "wx": [
+    -93.2983,
+    30.191567
+   ],
+   "chainNm": 52.453,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_115",
+   "name": "Light/Buoy 115",
+   "lon": -93.289025,
+   "lat": 30.197884,
+   "type": "MARK",
+   "chainNm": 53.063,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "BR210",
+   "name": "I-210 Bridge",
+   "lon": -93.281128,
+   "lat": 30.202655,
+   "type": "JUNCTION",
+   "wx": [
+    -93.281128,
+    30.202655
+   ],
+   "chainNm": 53.563,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "CI_ENT",
+   "name": "Coon Island Entrance",
+   "lon": -93.277422,
+   "lat": 30.204893,
+   "type": "JUNCTION",
+   "wx": [
+    -93.278068,
+    30.205692
+   ],
+   "chainNm": 53.797,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_115A",
+   "name": "Light/Buoy 115A",
+   "lon": -93.274759,
+   "lat": 30.206502,
+   "type": "MARK",
+   "chainNm": 53.966,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_116",
+   "name": "Light/Buoy 116",
+   "lon": -93.272971,
+   "lat": 30.204987,
+   "type": "MARK",
+   "chainNm": 54.096,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_117",
+   "name": "Light/Buoy 117",
+   "lon": -93.271849,
+   "lat": 30.207345,
+   "type": "MARK",
+   "chainNm": 54.249,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_118",
+   "name": "Light/Buoy 118",
+   "lon": -93.265176,
+   "lat": 30.205781,
+   "type": "MARK",
+   "chainNm": 54.608,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_119_120",
+   "name": "Light/Buoy 119/120",
+   "lon": -93.259082,
+   "lat": 30.210936,
+   "type": "MARK",
+   "chainNm": 55.05,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "CLOONEY_RJ",
+   "name": "Clooney Rejoin",
+   "lon": -93.260763,
+   "lat": 30.217381,
+   "type": "JUNCTION",
+   "wx": [
+    -93.26015,
+    30.2175
+   ],
+   "chainNm": 55.447,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_121",
+   "name": "Light/Buoy 121",
+   "lon": -93.261263,
+   "lat": 30.219298,
+   "type": "MARK",
+   "chainNm": 55.565,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "CD",
+   "name": "City Docks",
+   "lon": -93.254362,
+   "lat": 30.219212,
+   "type": "BERTH",
+   "wx": [
+    -93.254383,
+    30.21795
+   ],
+   "chainNm": 55.923,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_122",
+   "name": "Light/Buoy 122",
+   "lon": -93.239366,
+   "lat": 30.219027,
+   "type": "MARK",
+   "chainNm": 56.701,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_122A",
+   "name": "Light/Buoy 122A",
+   "lon": -93.239113,
+   "lat": 30.221451,
+   "type": "MARK",
+   "chainNm": 56.847,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_123_124",
+   "name": "Light/Buoy 123/124",
+   "lon": -93.241286,
+   "lat": 30.221681,
+   "type": "MARK",
+   "chainNm": 56.961,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_125_126",
+   "name": "Light/Buoy 125/126",
+   "lon": -93.242695,
+   "lat": 30.225029,
+   "type": "MARK",
+   "chainNm": 57.175,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_128",
+   "name": "Light/Buoy 128",
+   "lon": -93.244641,
+   "lat": 30.22891,
+   "type": "MARK",
+   "chainNm": 57.429,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_130",
+   "name": "Light/Buoy 130",
+   "lon": -93.245119,
+   "lat": 30.230733,
+   "type": "MARK",
+   "chainNm": 57.541,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_132",
+   "name": "Light/Buoy 132",
+   "lon": -93.244139,
+   "lat": 30.231524,
+   "type": "MARK",
+   "chainNm": 57.611,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_134",
+   "name": "Light/Buoy 134",
+   "lon": -93.244393,
+   "lat": 30.234603,
+   "type": "MARK",
+   "chainNm": 57.796,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "BT4",
+   "name": "Bulk Terminal 4",
+   "lon": -93.245644,
+   "lat": 30.234749,
+   "type": "BERTH",
+   "wx": [
+    -93.247017,
+    30.232833
+   ],
+   "chainNm": 57.861,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "MK_136",
+   "name": "Light/Buoy 136",
+   "lon": -93.245644,
+   "lat": 30.234749,
+   "type": "MARK",
+   "chainNm": 57.861,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "LOOP_23",
+   "name": "Clooneys Loop 2/3",
+   "lon": -93.268982,
+   "lat": 30.218108,
+   "type": "MARK",
+   "chainNm": 55.447,
+   "onBranch": true,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "P66_3",
+   "name": "P66/3 (Clooney Island)",
+   "lon": -93.25465,
+   "lat": 30.2304,
+   "type": "BERTH",
+   "chainNm": 55.565,
+   "onBranch": true,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "CI_3_4",
+   "name": "Coon Island 3/4",
+   "lon": -93.280072,
+   "lat": 30.212697,
+   "type": "MARK",
+   "chainNm": 53.797,
+   "onBranch": true,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "CI_6",
+   "name": "Coon Island 6",
+   "lon": -93.27978,
+   "lat": 30.214877,
+   "type": "MARK",
+   "chainNm": 53.797,
+   "onBranch": true,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "WC_A",
+   "name": "WC/A (Westlake Chemical A)",
+   "lon": -93.281033,
+   "lat": 30.215917,
+   "type": "BERTH",
+   "chainNm": 53.797,
+   "onBranch": true,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "CI_8",
+   "name": "Coon Island 8",
+   "lon": -93.279933,
+   "lat": 30.217854,
+   "type": "MARK",
+   "chainNm": 53.797,
+   "onBranch": true,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "CI_10_12",
+   "name": "Coon Island 10/12",
+   "lon": -93.278556,
+   "lat": 30.220845,
+   "type": "MARK",
+   "chainNm": 53.797,
+   "onBranch": true,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "WC_C",
+   "name": "WC/C (Westlake Chemical C)",
+   "lon": -93.27785,
+   "lat": 30.223017,
+   "type": "BERTH",
+   "chainNm": 53.797,
+   "onBranch": true,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "DE_JCT",
+   "name": "Devils Elbow Junction",
+   "lon": -93.307598,
+   "lat": 30.103905,
+   "type": "MARK",
+   "chainNm": 45.871,
+   "onBranch": true,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "DE_7_8",
+   "name": "Industrial Canal 7/8",
+   "lon": -93.301077,
+   "lat": 30.108207,
+   "type": "MARK",
+   "chainNm": 45.871,
+   "onBranch": true,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "DE_10",
+   "name": "Industrial Canal 10",
+   "lon": -93.294356,
+   "lat": 30.108443,
+   "type": "MARK",
+   "chainNm": 45.871,
+   "onBranch": true,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
+  {
+   "id": "ALCOA",
+   "name": "Alcoa",
+   "lon": -93.28775,
+   "lat": 30.107383,
+   "type": "BERTH",
+   "chainNm": 45.871,
+   "onBranch": true,
+   "stations": {
+    "weather": "W_LC",
+    "wave": null,
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  }
+ ],
+ "edges": [
+  {
+   "a": "MK_1_2",
+   "b": "MK_1A_2A",
+   "nm": 1.012,
+   "zone": "Outer bar",
+   "loaded": 11.8,
+   "light": 13.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_1A_2A",
+   "b": "MK_2B",
+   "nm": 4.513,
+   "zone": "Outer bar",
+   "loaded": 11.8,
+   "light": 13.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_2B",
+   "b": "MK_3_4",
+   "nm": 1.645,
+   "zone": "Outer bar",
+   "loaded": 11.8,
+   "light": 13.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_3_4",
+   "b": "MK_5_6",
+   "nm": 1.035,
+   "zone": "Outer bar",
+   "loaded": 11.8,
+   "light": 13.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_5_6",
+   "b": "MK_7_8",
+   "nm": 0.991,
+   "zone": "Outer bar",
+   "loaded": 11.8,
+   "light": 13.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_7_8",
+   "b": "MK_9",
+   "nm": 0.303,
+   "zone": "Outer bar",
+   "loaded": 11.8,
+   "light": 13.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_9",
+   "b": "MK_11_12",
+   "nm": 0.795,
+   "zone": "Outer bar",
+   "loaded": 11.8,
+   "light": 13.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_11_12",
+   "b": "MK_14",
+   "nm": 1.04,
+   "zone": "Outer bar",
+   "loaded": 11.8,
+   "light": 13.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_14",
+   "b": "MK_15_16",
+   "nm": 1.008,
+   "zone": "Outer bar",
+   "loaded": 11.8,
+   "light": 13.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_15_16",
+   "b": "MK_18",
+   "nm": 1.022,
+   "zone": "Outer bar",
+   "loaded": 11.8,
+   "light": 13.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_18",
+   "b": "MK_19_20",
+   "nm": 1.012,
+   "zone": "Outer bar",
+   "loaded": 11.8,
+   "light": 13.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_19_20",
+   "b": "MK_22",
+   "nm": 1.03,
+   "zone": "Outer bar",
+   "loaded": 11.8,
+   "light": 13.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_22",
+   "b": "MK_23_24",
+   "nm": 1.005,
+   "zone": "Outer bar",
+   "loaded": 11.8,
+   "light": 13.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_23_24",
+   "b": "MK_27_28",
+   "nm": 1.02,
+   "zone": "Outer bar",
+   "loaded": 11.8,
+   "light": 13.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_27_28",
+   "b": "MK_29_30",
+   "nm": 1.157,
+   "zone": "Outer bar",
+   "loaded": 11.8,
+   "light": 13.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_29_30",
+   "b": "MK_31_32",
+   "nm": 0.961,
+   "zone": "Outer bar",
+   "loaded": 11.8,
+   "light": 13.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_31_32",
+   "b": "MK_33_34",
+   "nm": 1.01,
+   "zone": "Outer bar",
+   "loaded": 11.8,
+   "light": 13.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_33_34",
+   "b": "MK_35_36",
+   "nm": 1.005,
+   "zone": "Outer bar",
+   "loaded": 11.8,
+   "light": 13.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_35_36",
+   "b": "MK_37_38",
+   "nm": 0.998,
+   "zone": "Outer bar",
+   "loaded": 11.8,
+   "light": 13.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_37_38",
+   "b": "MK_39_40",
+   "nm": 0.966,
+   "zone": "Outer bar",
+   "loaded": 11.8,
+   "light": 13.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_39_40",
+   "b": "MK_41_42",
+   "nm": 1.142,
+   "zone": "Outer bar",
+   "loaded": 11.8,
+   "light": 13.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_41_42",
+   "b": "MK_47_48",
+   "nm": 1.345,
+   "zone": "42-48",
+   "loaded": 9.5,
+   "light": 9.5,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_47_48",
+   "b": "VG",
+   "nm": 0.42,
+   "zone": "48-53",
+   "loaded": 6.8,
+   "light": 7.5,
+   "dir": "BOTH"
+  },
+  {
+   "a": "VG",
+   "b": "MK_50",
+   "nm": 0.273,
+   "zone": "48-53",
+   "loaded": 6.8,
+   "light": 7.5,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_50",
+   "b": "MK_52",
+   "nm": 1.223,
+   "zone": "48-53",
+   "loaded": 6.8,
+   "light": 7.5,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_52",
+   "b": "MK_53",
+   "nm": 0.289,
+   "zone": "48-53",
+   "loaded": 6.8,
+   "light": 7.5,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_53",
+   "b": "MK_56",
+   "nm": 1.138,
+   "zone": "53-60",
+   "loaded": 8.0,
+   "light": 9.5,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_56",
+   "b": "MK_57",
+   "nm": 0.57,
+   "zone": "53-60",
+   "loaded": 8.0,
+   "light": 9.5,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_57",
+   "b": "MK_60",
+   "nm": 0.513,
+   "zone": "53-60",
+   "loaded": 8.0,
+   "light": 9.5,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_60",
+   "b": "MK_61_62",
+   "nm": 0.837,
+   "zone": "60-ICW (92)",
+   "loaded": 7.7,
+   "light": 10.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_61_62",
+   "b": "MK_63_64",
+   "nm": 0.999,
+   "zone": "60-ICW (92)",
+   "loaded": 7.7,
+   "light": 10.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_63_64",
+   "b": "MK_65_66",
+   "nm": 0.986,
+   "zone": "60-ICW (92)",
+   "loaded": 7.7,
+   "light": 10.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_65_66",
+   "b": "MK_67_68",
+   "nm": 0.958,
+   "zone": "60-ICW (92)",
+   "loaded": 7.7,
+   "light": 10.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_67_68",
+   "b": "MK_69_70",
+   "nm": 0.845,
+   "zone": "60-ICW (92)",
+   "loaded": 7.7,
+   "light": 10.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_69_70",
+   "b": "MK_71_72",
+   "nm": 0.835,
+   "zone": "60-ICW (92)",
+   "loaded": 7.7,
+   "light": 10.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_71_72",
+   "b": "MK_73_74",
+   "nm": 0.951,
+   "zone": "60-ICW (92)",
+   "loaded": 7.7,
+   "light": 10.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_73_74",
+   "b": "MK_75_76",
+   "nm": 0.945,
+   "zone": "60-ICW (92)",
+   "loaded": 7.7,
+   "light": 10.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_75_76",
+   "b": "MK_77_78",
+   "nm": 0.931,
+   "zone": "60-ICW (92)",
+   "loaded": 7.7,
+   "light": 10.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_77_78",
+   "b": "MK_79_80",
+   "nm": 1.048,
+   "zone": "60-ICW (92)",
+   "loaded": 7.7,
+   "light": 10.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_79_80",
+   "b": "MK_81_82",
+   "nm": 0.824,
+   "zone": "60-ICW (92)",
+   "loaded": 7.7,
+   "light": 10.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_81_82",
+   "b": "MK_83_84",
+   "nm": 0.873,
+   "zone": "60-ICW (92)",
+   "loaded": 7.7,
+   "light": 10.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_83_84",
+   "b": "CLNG",
+   "nm": 1.036,
+   "zone": "60-ICW (92)",
+   "loaded": 7.7,
+   "light": 10.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "CLNG",
+   "b": "MK_85_86",
+   "nm": 0.546,
+   "zone": "60-ICW (92)",
+   "loaded": 7.7,
+   "light": 10.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_85_86",
+   "b": "MK_87_88",
+   "nm": 0.957,
+   "zone": "60-ICW (92)",
+   "loaded": 7.7,
+   "light": 10.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_87_88",
+   "b": "MK_89_90",
+   "nm": 0.812,
+   "zone": "60-ICW (92)",
+   "loaded": 7.7,
+   "light": 10.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_89_90",
+   "b": "MK_91_92",
+   "nm": 0.633,
+   "zone": "60-ICW (92)",
+   "loaded": 7.7,
+   "light": 10.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_91_92",
+   "b": "DE_GATE",
+   "nm": 0.411,
+   "zone": "ICW-100",
+   "loaded": 6.7,
+   "light": 7.5,
+   "dir": "BOTH"
+  },
+  {
+   "a": "DE_GATE",
+   "b": "MK_96",
+   "nm": 0.944,
+   "zone": "ICW-100",
+   "loaded": 6.7,
+   "light": 7.5,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_96",
+   "b": "MK_97_98",
+   "nm": 0.209,
+   "zone": "ICW-100",
+   "loaded": 6.7,
+   "light": 7.5,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_97_98",
+   "b": "MK_99_100",
+   "nm": 0.212,
+   "zone": "ICW-100",
+   "loaded": 6.7,
+   "light": 7.5,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_99_100",
+   "b": "MK_101_102",
+   "nm": 0.499,
+   "zone": "100-106",
+   "loaded": 7.5,
+   "light": 8.5,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_101_102",
+   "b": "MK_103_104",
+   "nm": 0.53,
+   "zone": "100-106",
+   "loaded": 7.5,
+   "light": 8.5,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_103_104",
+   "b": "MK_106",
+   "nm": 0.72,
+   "zone": "100-106",
+   "loaded": 7.5,
+   "light": 8.5,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_106",
+   "b": "CII",
+   "nm": 0.017,
+   "zone": "106-110",
+   "loaded": 5.2,
+   "light": 5.5,
+   "dir": "BOTH"
+  },
+  {
+   "a": "CII",
+   "b": "MK_108",
+   "nm": 0.472,
+   "zone": "106-110",
+   "loaded": 5.2,
+   "light": 5.5,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_108",
+   "b": "P66_CR",
+   "nm": 0.216,
+   "zone": "106-110",
+   "loaded": 5.2,
+   "light": 5.5,
+   "dir": "BOTH"
+  },
+  {
+   "a": "P66_CR",
+   "b": "CS_CR",
+   "nm": 0.229,
+   "zone": "106-110",
+   "loaded": 5.2,
+   "light": 5.5,
+   "dir": "BOTH"
+  },
+  {
+   "a": "CS_CR",
+   "b": "MK_109_110",
+   "nm": 0.319,
+   "zone": "106-110",
+   "loaded": 5.2,
+   "light": 5.5,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_109_110",
+   "b": "C_S",
+   "nm": 0.819,
+   "zone": "110-Citgo",
+   "loaded": 6.5,
+   "light": 6.5,
+   "dir": "BOTH"
+  },
+  {
+   "a": "C_S",
+   "b": "MK_112",
+   "nm": 0.027,
+   "zone": "Citgo-A4",
+   "loaded": 4.5,
+   "light": 4.9,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_112",
+   "b": "BT1",
+   "nm": 0.643,
+   "zone": "Citgo-A4",
+   "loaded": 4.5,
+   "light": 4.9,
+   "dir": "BOTH"
+  },
+  {
+   "a": "BT1",
+   "b": "MK_114",
+   "nm": 0.165,
+   "zone": "Citgo-A4",
+   "loaded": 4.5,
+   "light": 4.9,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_114",
+   "b": "A4",
+   "nm": 0.562,
+   "zone": "Citgo-A4",
+   "loaded": 4.5,
+   "light": 4.9,
+   "dir": "BOTH"
+  },
+  {
+   "a": "A4",
+   "b": "MK_115",
+   "nm": 0.61,
+   "zone": "A4-210 bridge",
+   "loaded": 6.5,
+   "light": 6.5,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_115",
+   "b": "BR210",
+   "nm": 0.5,
+   "zone": "A4-210 bridge",
+   "loaded": 6.5,
+   "light": 6.5,
+   "dir": "BOTH"
+  },
+  {
+   "a": "BR210",
+   "b": "CI_ENT",
+   "nm": 0.235,
+   "zone": "210 to other terminals",
+   "loaded": 5.0,
+   "light": 6.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "CI_ENT",
+   "b": "MK_115A",
+   "nm": 0.169,
+   "zone": "210 to other terminals",
+   "loaded": 5.0,
+   "light": 6.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_115A",
+   "b": "MK_116",
+   "nm": 0.13,
+   "zone": "210 to other terminals",
+   "loaded": 5.0,
+   "light": 6.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_116",
+   "b": "MK_117",
+   "nm": 0.153,
+   "zone": "210 to other terminals",
+   "loaded": 5.0,
+   "light": 6.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_117",
+   "b": "MK_118",
+   "nm": 0.359,
+   "zone": "210 to other terminals",
+   "loaded": 5.0,
+   "light": 6.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_118",
+   "b": "MK_119_120",
+   "nm": 0.442,
+   "zone": "210 to other terminals",
+   "loaded": 5.0,
+   "light": 6.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_119_120",
+   "b": "CLOONEY_RJ",
+   "nm": 0.397,
+   "zone": "210 to other terminals",
+   "loaded": 5.0,
+   "light": 6.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "CLOONEY_RJ",
+   "b": "MK_121",
+   "nm": 0.118,
+   "zone": "210 to other terminals",
+   "loaded": 5.0,
+   "light": 6.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_121",
+   "b": "CD",
+   "nm": 0.358,
+   "zone": "210 to other terminals",
+   "loaded": 5.0,
+   "light": 6.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "CD",
+   "b": "MK_122",
+   "nm": 0.778,
+   "zone": "210 to other terminals",
+   "loaded": 5.0,
+   "light": 6.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_122",
+   "b": "MK_122A",
+   "nm": 0.146,
+   "zone": "210 to other terminals",
+   "loaded": 5.0,
+   "light": 6.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_122A",
+   "b": "MK_123_124",
+   "nm": 0.114,
+   "zone": "210 to other terminals",
+   "loaded": 5.0,
+   "light": 6.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_123_124",
+   "b": "MK_125_126",
+   "nm": 0.214,
+   "zone": "210 to other terminals",
+   "loaded": 5.0,
+   "light": 6.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_125_126",
+   "b": "MK_128",
+   "nm": 0.254,
+   "zone": "210 to other terminals",
+   "loaded": 5.0,
+   "light": 6.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_128",
+   "b": "MK_130",
+   "nm": 0.112,
+   "zone": "210 to other terminals",
+   "loaded": 5.0,
+   "light": 6.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_130",
+   "b": "MK_132",
+   "nm": 0.07,
+   "zone": "210 to other terminals",
+   "loaded": 5.0,
+   "light": 6.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_132",
+   "b": "MK_134",
+   "nm": 0.185,
+   "zone": "210 to other terminals",
+   "loaded": 5.0,
+   "light": 6.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_134",
+   "b": "BT4",
+   "nm": 0.065,
+   "zone": "210 to other terminals",
+   "loaded": 5.0,
+   "light": 6.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "BT4",
+   "b": "MK_136",
+   "nm": 0.0,
+   "zone": "210 to other terminals",
+   "loaded": 5.0,
+   "light": 6.0,
+   "dir": "BOTH"
+  },
+  {
+   "a": "MK_121",
+   "b": "P66_3",
+   "nm": 0.75,
+   "zone": "210 to other terminals",
+   "loaded": 5.0,
+   "light": 6.0,
+   "dir": "A_TO_B",
+   "note": "Inbound only \u2014 leave 121 to port, NNE to the berth"
+  },
+  {
+   "a": "P66_3",
+   "b": "LOOP_23",
+   "nm": 1.048,
+   "zone": "210 to other terminals",
+   "loaded": 5.0,
+   "light": 6.0,
+   "dir": "A_TO_B",
+   "note": "Outbound only \u2014 around Clooney Island"
+  },
+  {
+   "a": "LOOP_23",
+   "b": "CLOONEY_RJ",
+   "nm": 0.429,
+   "zone": "210 to other terminals",
+   "loaded": 5.0,
+   "light": 6.0,
+   "dir": "A_TO_B",
+   "note": "Outbound only \u2014 between Loop 2 and 3"
+  },
+  {
+   "a": "CI_ENT",
+   "b": "CI_3_4",
+   "nm": 0.488,
+   "zone": "210 to WL terminals",
+   "loaded": 4.0,
+   "light": 5.5,
+   "dir": "BOTH"
+  },
+  {
+   "a": "CI_3_4",
+   "b": "CI_6",
+   "nm": 0.132,
+   "zone": "210 to WL terminals",
+   "loaded": 4.0,
+   "light": 5.5,
+   "dir": "BOTH"
+  },
+  {
+   "a": "CI_6",
+   "b": "WC_A",
+   "nm": 0.09,
+   "zone": "210 to WL terminals",
+   "loaded": 4.0,
+   "light": 5.5,
+   "dir": "BOTH"
+  },
+  {
+   "a": "WC_A",
+   "b": "CI_8",
+   "nm": 0.13,
+   "zone": "210 to WL terminals",
+   "loaded": 4.0,
+   "light": 5.5,
+   "dir": "BOTH"
+  },
+  {
+   "a": "CI_8",
+   "b": "CI_10_12",
+   "nm": 0.193,
+   "zone": "210 to WL terminals",
+   "loaded": 4.0,
+   "light": 5.5,
+   "dir": "BOTH"
+  },
+  {
+   "a": "CI_10_12",
+   "b": "WC_C",
+   "nm": 0.135,
+   "zone": "210 to WL terminals",
+   "loaded": 4.0,
+   "light": 5.5,
+   "dir": "BOTH"
+  },
+  {
+   "a": "DE_GATE",
+   "b": "DE_JCT",
+   "nm": 1.157,
+   "zone": "Devils Elbow canal",
+   "loaded": 5.5,
+   "light": 5.5,
+   "dir": "BOTH"
+  },
+  {
+   "a": "DE_JCT",
+   "b": "DE_7_8",
+   "nm": 0.426,
+   "zone": "Devils Elbow canal",
+   "loaded": 5.5,
+   "light": 5.5,
+   "dir": "BOTH"
+  },
+  {
+   "a": "DE_7_8",
+   "b": "DE_10",
+   "nm": 0.349,
+   "zone": "Devils Elbow canal",
+   "loaded": 5.5,
+   "light": 5.5,
+   "dir": "BOTH"
+  },
+  {
+   "a": "DE_10",
+   "b": "ALCOA",
+   "nm": 0.349,
+   "zone": "Devils Elbow canal",
+   "loaded": 5.5,
+   "light": 5.5,
+   "dir": "BOTH"
+  }
+ ]
+};
+/* ==== ENGINE INJECTED BELOW ==== */
+/* ============================================================================
+   TRANSIT BRIEF — CORE ENGINE
+   Pure, deterministic, UI-free. No DOM access in this file.
+   Layers:  units -> channel -> transit -> environment -> transfer -> alerts
+   ========================================================================== */
+
+/* ---------------------------------------------------------------- UNITS ---
+   Every direction carries an explicit convention. There is no such thing
+   as a bare bearing in this system. FROM = where it comes from (wind, waves,
+   swell). TOWARD = where it flows to (current set, vessel heading).
+   -------------------------------------------------------------------------*/
+
+const FROM = 'FROM';
+const TOWARD = 'TOWARD';
+
+function dir(deg, convention) {
+  if (convention !== FROM && convention !== TOWARD) {
+    throw new Error('direction requires an explicit FROM/TOWARD convention');
+  }
+  return { deg: norm360(deg), convention };
+}
+
+function asFrom(d) {
+  if (!d) return null;
+  return d.convention === FROM ? d : dir(d.deg + 180, FROM);
+}
+
+function asToward(d) {
+  if (!d) return null;
+  return d.convention === TOWARD ? d : dir(d.deg + 180, TOWARD);
+}
+
+function norm360(deg) {
+  let x = deg % 360;
+  if (x < 0) x += 360;
+  return x;
+}
+
+// Signed shortest angle a -> b, in (-180, 180]. Negative = b is to the left of a.
+function relAngle(a, b) {
+  let d = norm360(b - a);
+  if (d > 180) d -= 360;
+  return d;
+}
+
+const COMPASS = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+function compass(deg) {
+  return COMPASS[Math.round(norm360(deg) / 22.5) % 16];
+}
+
+/* ------------------------------------------------------------- TIME -------
+   All internal time is epoch milliseconds. Formatting to port-local wall
+   clock happens only at the presentation edge. DST is handled by Intl.
+   -------------------------------------------------------------------------*/
+
+function tzOffsetMs(epoch, tz) {
+  const dtf = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz, hour12: false,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit'
+  });
+  const p = {};
+  for (const part of dtf.formatToParts(new Date(epoch))) {
+    if (part.type !== 'literal') p[part.type] = part.value;
+  }
+  const asUTC = Date.UTC(+p.year, +p.month - 1, +p.day,
+    p.hour === '24' ? 0 : +p.hour, +p.minute, +p.second);
+  return asUTC - epoch;
+}
+
+// Convert a port-local wall clock reading into a true epoch timestamp.
+function wallToEpoch(y, mo, d, h, mi, tz) {
+  const naive = Date.UTC(y, mo - 1, d, h, mi, 0);
+  let guess = naive;
+  for (let i = 0; i < 3; i++) guess = naive - tzOffsetMs(guess, tz);
+  return guess;
+}
+
+function fmtClock(epoch, tz) {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: tz, hour12: false, hour: '2-digit', minute: '2-digit'
+  }).format(new Date(epoch));
+}
+
+function fmtDay(epoch, tz) {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: tz, weekday: 'short', month: 'short', day: 'numeric'
+  }).format(new Date(epoch));
+}
+
+function fmtDuration(ms) {
+  const total = Math.round(ms / 60000);
+  const h = Math.floor(total / 60), m = total % 60;
+  return h > 0 ? `${h}h ${String(m).padStart(2, '0')}m` : `${m}m`;
+}
+
+const MIN = 60000, HOUR = 3600000;
+
+/* ---------------------------------------------------------- CHANNEL -------
+   Graph model. Nodes carry real coordinates; edge distances and courses are
+   COMPUTED from those coordinates, never typed in. Edges may be one-way,
+   which is how the Clooney Island loop is represented.
+
+   Node geometry is the channel position (berths snapped to the marked
+   channel). Node.wx, when present, is the berth's true pin, used for
+   weather lookup only.
+   -------------------------------------------------------------------------*/
+
+var CHANNEL = typeof CHANNEL_DATA !== 'undefined' ? CHANNEL_DATA : null;
+
+const EARTH_NM = 3440.065;
+
+function haversineNm(a, b) {
+  const la1 = a.lat * Math.PI / 180, la2 = b.lat * Math.PI / 180;
+  const dla = la2 - la1, dlo = (b.lon - a.lon) * Math.PI / 180;
+  const h = Math.sin(dla / 2) ** 2 + Math.cos(la1) * Math.cos(la2) * Math.sin(dlo / 2) ** 2;
+  return 2 * Math.asin(Math.sqrt(h)) * EARTH_NM;
+}
+
+function initialBearing(a, b) {
+  const la1 = a.lat * Math.PI / 180, la2 = b.lat * Math.PI / 180;
+  const dlo = (b.lon - a.lon) * Math.PI / 180;
+  const y = Math.sin(dlo) * Math.cos(la2);
+  const x = Math.cos(la1) * Math.sin(la2) - Math.sin(la1) * Math.cos(la2) * Math.cos(dlo);
+  return norm360(Math.atan2(y, x) * 180 / Math.PI);
+}
+
+function buildGraph(ch) {
+  const nodes = {}, adj = {};
+  for (const n of ch.nodes) { nodes[n.id] = n; adj[n.id] = []; }
+  for (const e of ch.edges) {
+    const A = nodes[e.a], B = nodes[e.b];
+    if (!A || !B) throw new Error('edge references a missing node: ' + e.a + '/' + e.b);
+    const nm = e.nm != null ? e.nm : haversineNm(A, B);
+    adj[e.a].push({ to: e.b, edge: e, nm, course: initialBearing(A, B) });
+    if (e.dir === 'BOTH')
+      adj[e.b].push({ to: e.a, edge: e, nm, course: initialBearing(B, A) });
+  }
+  return { nodes, adj };
+}
+
+function pointById(id, ch) {
+  ch = ch || CHANNEL;
+  const p = ch.nodes.find(x => x.id === id);
+  if (!p) throw new Error('unknown point: ' + id);
+  return p;
+}
+
+function selectablePoints(ch) {
+  ch = ch || CHANNEL;
+  return ch.nodes.filter(n =>
+    n.type === 'BERTH' || n.type === 'ANCHORAGE' || n.type === 'PILOT_STATION');
+}
+
+/* Dijkstra over the directed graph. Shortest navigable path, honouring
+   one-way edges — so the route out of a berth may differ from the route in. */
+const LOADED = 'LOADED', LIGHT = 'LIGHT';
+
+/** Speed for an edge under the given loading condition. */
+function edgeSpeed(edge, condition) {
+  const v = condition === LIGHT ? edge.light : edge.loaded;
+  if (v == null) throw new Error('edge has no speed for condition ' + condition);
+  return v;
+}
+
+function buildLegs(fromId, toId, ch, condition) {
+  condition = condition || LOADED;
+  ch = ch || CHANNEL;
+  if (fromId === toId) throw new Error('origin and destination are the same');
+  const g = buildGraph(ch);
+  if (!g.nodes[fromId] || !g.nodes[toId]) throw new Error('unknown point');
+
+  const dist = { [fromId]: 0 }, prev = {}, seen = {};
+  const queue = [[0, fromId]];
+  while (queue.length) {
+    queue.sort((x, y) => x[0] - y[0]);
+    const [d, u] = queue.shift();
+    if (seen[u]) continue;
+    seen[u] = true;
+    if (u === toId) break;
+    for (const link of g.adj[u] || []) {
+      const nd = d + link.nm;
+      if (nd < (dist[link.to] != null ? dist[link.to] : Infinity)) {
+        dist[link.to] = nd;
+        prev[link.to] = { from: u, link };
+        queue.push([nd, link.to]);
+      }
+    }
+  }
+  if (dist[toId] == null) throw new Error('no navigable route from ' + fromId + ' to ' + toId);
+
+  const path = [toId];
+  while (path[path.length - 1] !== fromId) path.push(prev[path[path.length - 1]].from);
+  path.reverse();
+
+  const route = path.map(id => g.nodes[id]);
+  const legs = [];
+  for (let i = 0; i < path.length - 1; i++) {
+    const link = prev[path[i + 1]].link;
+    const from = g.nodes[path[i]], to = g.nodes[path[i + 1]];
+    legs.push({
+      from, to,
+      distanceNm: link.nm,
+      course: link.course,
+      zone: link.edge.zone || null,
+      defaultSpeed: edgeSpeed(link.edge, condition),
+      speedLoaded: link.edge.loaded,
+      speedLight: link.edge.light,
+      oneWay: link.edge.dir !== 'BOTH',
+      note: link.edge.note || null,
+      // Chainage of the leg midpoint — the position at which current is sampled.
+      currentKey: (from.chainNm != null && to.chainNm != null)
+        ? String((from.chainNm + to.chainNm) / 2) : null,
+      currentStation: (from.stations && from.stations.current) || null
+    });
+  }
+
+  // Direction of travel, for the sign of the along-channel current component.
+  // Measured against the seaward end of the channel, which is fixed — there
+  // are several boarding points, so "toward the pilot station" is ambiguous.
+  const seaward = ch.nodes.find(n => n.id === ch.seawardNodeId) ||
+                  ch.nodes.find(n => n.type === 'PILOT_STATION');
+  const outbound = seaward
+    ? haversineNm(route[route.length - 1], seaward) < haversineNm(route[0], seaward)
+    : false;
+
+  return { outbound, route, legs, totalNm: dist[toId] };
+}
+
+/**
+ * @param opts.currentAt (stationId, epoch) -> { signedKts, ... } | null
+ *        signedKts positive = flood = flow toward INCREASING mile (upriver)
+ */
+function solveTransit(opts) {
+  const ch = opts.channel || CHANNEL;
+  const condition = opts.condition || LOADED;
+  const { outbound, route, legs } = buildLegs(opts.fromId, opts.toId, ch, condition);
+  const dirSign = outbound ? -1 : 1;
+  const speedOverride = opts.speedOverride || null;
+  const currentAt = opts.currentAt || (() => null);
+  const applyCurrent = opts.applyCurrent !== false;
+
+  const startPoint = route[0];
+  const underway = startPoint.type === 'BERTH'
+    ? opts.sailEpoch + ch.letGoMinutes * MIN
+    : opts.sailEpoch;
+
+  let etas = null;
+  let iterations = 0;
+  let converged = false;
+
+  for (let pass = 0; pass < 8; pass++) {
+    iterations = pass + 1;
+    const next = [underway];
+    for (let i = 0; i < legs.length; i++) {
+      const leg = legs[i];
+      const stw = speedOverride != null ? speedOverride : leg.defaultSpeed;
+      let sog = stw;
+      let cur = null;
+      if (applyCurrent && leg.currentKey) {
+        // Sample at the leg's provisional midpoint time.
+        const t0 = next[i];
+        const guessDur = (leg.distanceNm / Math.max(stw, 0.5)) * HOUR;
+        const tMid = etas ? (etas[i] + (etas[i + 1] - etas[i]) / 2) : t0 + guessDur / 2;
+        cur = currentAt(leg.currentStation, tMid);
+        if (cur && typeof cur.signedKts === 'number') {
+          sog = stw + dirSign * cur.signedKts;
+        }
+      }
+      sog = Math.max(sog, 1.0); // never divide by a stopped ship
+      leg.stw = stw;
+      leg.sog = sog;
+      leg.current = cur;
+      next.push(next[i] + (leg.distanceNm / sog) * HOUR);
+    }
+
+    if (etas) {
+      const maxDelta = Math.max(...next.map((t, i) => Math.abs(t - etas[i])));
+      etas = next;
+      if (maxDelta < 20000) { converged = true; break; }
+    } else {
+      etas = next;
+    }
+  }
+
+  const waypoints = route.map((p, i) => ({
+    point: p, eta: etas[i],
+    legIn: i > 0 ? legs[i - 1] : null,
+    legOut: i < legs.length ? legs[i] : null
+  }));
+
+  const last = waypoints[waypoints.length - 1];
+  const pilotOff = last.point.type === 'PILOT_STATION'
+    ? last.eta + ch.disembarkMinutes * MIN
+    : null;
+
+  return {
+    outbound, legs, waypoints, etas,
+    sailEpoch: opts.sailEpoch,
+    underwayEpoch: underway,
+    arrivalEpoch: last.eta,
+    pilotOffEpoch: pilotOff,
+    endEpoch: pilotOff || last.eta,
+    totalNm: legs.reduce((s, l) => s + l.distanceNm, 0),
+    converged, iterations, condition,
+    currentApplied: applyCurrent
+  };
+}
+
+/** Where is the vessel at time t? Interpolates between solved waypoints. */
+function locateAt(transit, t) {
+  const wps = transit.waypoints;
+  if (t <= wps[0].eta) return { before: null, after: wps[0], label: `At ${wps[0].point.name}`, atOrBefore: true };
+  if (t >= wps[wps.length - 1].eta) {
+    const w = wps[wps.length - 1];
+    return { before: w, after: null, label: `At ${w.point.name}`, atOrBefore: false };
+  }
+  for (let i = 0; i < wps.length - 1; i++) {
+    if (t >= wps[i].eta && t <= wps[i + 1].eta) {
+      const f = (t - wps[i].eta) / (wps[i + 1].eta - wps[i].eta);
+      return {
+        before: wps[i], after: wps[i + 1], fraction: f,
+        label: `Between ${wps[i].point.name} and ${wps[i + 1].point.name}`
+      };
+    }
+  }
+  return null;
+}
+
+/* --------------------------------------------------------- UNDERWAY -------
+   Matching a live GPS fix to the planned transit.
+
+   A raw fix is not trusted as-is: it is projected onto the planned route, so
+   position is constrained to the channel. That removes most of the wander you
+   get from a phone in a steel wheelhouse, and it yields the one number the
+   rest of the engine wants — distance along the route.
+   -------------------------------------------------------------------------*/
+
+/** Perpendicular projection of a point onto the segment a-b. */
+function projectOnLeg(lat, lon, a, b) {
+  const k = Math.cos(lat * Math.PI / 180);
+  const vx = (b.lon - a.lon) * k, vy = b.lat - a.lat;
+  const wx = (lon - a.lon) * k, wy = lat - a.lat;
+  const L2 = vx * vx + vy * vy;
+  const t = L2 === 0 ? 0 : Math.max(0, Math.min(1, (wx * vx + wy * vy) / L2));
+  const px = a.lon + (b.lon - a.lon) * t, py = a.lat + (b.lat - a.lat) * t;
+  return { t, lat: py, lon: px, offNm: haversineNm({ lat, lon }, { lat: py, lon: px }) };
+}
+
+/**
+ * Find where a fix sits on the planned route.
+ * Returns null if the fix is further off the route than tolerance — better to
+ * say "off the planned route" than to snap to a leg the ship isn't on.
+ */
+function snapToRoute(transit, lat, lon, toleranceNm) {
+  const tol = toleranceNm == null ? 1.0 : toleranceNm;
+  let best = null, run = 0;
+  const runs = [0];
+  for (const leg of transit.legs) { run += leg.distanceNm; runs.push(run); }
+
+  for (let i = 0; i < transit.legs.length; i++) {
+    const leg = transit.legs[i];
+    const p = projectOnLeg(lat, lon, leg.from, leg.to);
+    if (best === null || p.offNm < best.offNm) {
+      best = {
+        legIndex: i, fraction: p.t, offNm: p.offNm,
+        lat: p.lat, lon: p.lon,
+        alongNm: runs[i] + p.t * leg.distanceNm,
+        leg
+      };
+    }
+  }
+  if (!best || best.offNm > tol) {
+    return best ? { ...best, offRoute: true } : null;
+  }
+  best.remainingNm = transit.totalNm - best.alongNm;
+  best.offRoute = false;
+  return best;
+}
+
+/**
+ * Recompute the rest of the transit from an actual position and time.
+ *
+ * @param opts.observedSog  if given, used for the leg currently being run;
+ *                          later legs keep their planned speeds, because one
+ *                          observed speed is not evidence about the next reach.
+ */
+function reviseTransit(transit, snap, nowEpoch, opts) {
+  opts = opts || {};
+  if (!snap || snap.offRoute) return null;
+  const currentAt = opts.currentAt || (() => null);
+  const legs = transit.legs;
+  const dirSign = transit.outbound ? -1 : 1;
+
+  const etas = [];
+  let t = nowEpoch;
+
+  // remainder of the leg being run
+  const first = legs[snap.legIndex];
+  const speedFor = (leg, isCurrent) =>
+    (isCurrent && opts.observedSog > 0.5) ? opts.observedSog
+      : (opts.speedOverride != null ? opts.speedOverride : leg.defaultSpeed);
+
+  const advance = (leg, nm, isCurrent) => {
+    const stw = speedFor(leg, isCurrent);
+    let sog = stw;
+    if (!isCurrent || !(opts.observedSog > 0.5)) {
+      const cur = currentAt(leg.currentKey, t + (nm / Math.max(stw, 0.5)) * HOUR / 2);
+      if (cur && typeof cur.signedKts === 'number') sog = stw + dirSign * cur.signedKts;
+    }
+    sog = Math.max(sog, 1.0);
+    t += (nm / sog) * HOUR;
+    return sog;
+  };
+
+  advance(first, first.distanceNm * (1 - snap.fraction), true);
+  etas.push({ point: first.to, eta: t, index: snap.legIndex + 1 });
+
+  for (let i = snap.legIndex + 1; i < legs.length; i++) {
+    advance(legs[i], legs[i].distanceNm, false);
+    etas.push({ point: legs[i].to, eta: t, index: i + 1 });
+  }
+
+  const arrival = t;
+  const last = transit.waypoints[transit.waypoints.length - 1];
+  const pilotOff = last.point.type === 'PILOT_STATION'
+    ? arrival + (transit.disembarkMinutes != null ? transit.disembarkMinutes : 6) * MIN
+    : null;
+
+  const plannedEnd = transit.endEpoch;
+  const revisedEnd = pilotOff || arrival;
+
+  return {
+    etas, arrivalEpoch: arrival, pilotOffEpoch: pilotOff, endEpoch: revisedEnd,
+    deltaMs: revisedEnd - plannedEnd,
+    remainingNm: snap.remainingNm,
+    observedSog: opts.observedSog != null ? opts.observedSog : null
+  };
+}
+
+/** Speed made good between two fixes, ignoring pairs too close to be meaningful. */
+function speedBetween(fixA, fixB) {
+  if (!fixA || !fixB) return null;
+  const dt = (fixB.t - fixA.t) / HOUR;
+  if (dt <= 0) return null;
+  const nm = haversineNm(fixA, fixB);
+  if (nm < 0.02) return null;
+  return nm / dt;
+}
+
+/* --------------------------------------------------------- GAUGES ---------
+   Tide and current come from a chain of gauges along the channel. A waypoint
+   between two of them gets a blend weighted by distance along the channel.
+
+   Blending the two time series is not the same as blending two numbers: each
+   gauge's series already carries its own phase, so a weighted sum of the two
+   produces an intermediate phase as well as an intermediate amplitude. That is
+   what makes high water arrive later upriver instead of everywhere at once.
+
+   Outside the outermost gauges the value is clamped to the nearest one and
+   flagged as extrapolated — it is not silently presented as measured.
+   -------------------------------------------------------------------------*/
+
+function gaugeChain(ch) {
+  ch = ch || CHANNEL;
+  return (ch.gauges || []).slice().sort((a, b) => a.chainNm - b.chainNm);
+}
+
+/** Which gauges bracket this chainage, and with what weight. */
+/**
+ * @param maxReachNm  how far beyond the outermost gauge a value may be carried.
+ *   Interpolating between two gauges is defensible; carrying one gauge's value
+ *   an arbitrary distance past the end of the chain is not. Beyond this, the
+ *   answer is "no data" rather than a number nobody should trust.
+ */
+function bracketGauges(gauges, chainNm, kind, maxReachNm) {
+  const usable = gauges.filter(g => g[kind]);
+  if (!usable.length) return null;
+  const reach = maxReachNm == null ? Infinity : maxReachNm;
+  if (chainNm <= usable[0].chainNm) {
+    const over = usable[0].chainNm - chainNm;
+    if (over > reach) return null;
+    return { a: usable[0], b: null, w: 0, extrapolated: over > 0.01, beyondNm: over };
+  }
+  const last = usable[usable.length - 1];
+  if (chainNm >= last.chainNm) {
+    const over = chainNm - last.chainNm;
+    if (over > reach) return null;
+    return { a: last, b: null, w: 0, extrapolated: over > 0.01, beyondNm: over };
+  }
+  for (let i = 0; i < usable.length - 1; i++) {
+    const a = usable[i], b = usable[i + 1];
+    if (chainNm >= a.chainNm && chainNm <= b.chainNm) {
+      const span = b.chainNm - a.chainNm;
+      return { a, b, w: span > 0 ? (chainNm - a.chainNm) / span : 0, extrapolated: false };
+    }
+  }
+  return null;
+}
+
+/**
+ * Estimate the propagation lag between two gauge series by cross-correlation.
+ * Positive means B lags A — high water reaches B later, which is what happens
+ * going upriver. Cached per pair per brief.
+ */
+function estimateLag(seriesA, seriesB, field, maxLagH) {
+  maxLagH = maxLagH || 6;
+  if (!seriesA || !seriesB || seriesA.length < 4 || seriesB.length < 4) return 0;
+  const at = (s, t) => {
+    const r = sampleSeries(s, t);
+    return r ? lerpNum(r.a[field], r.b ? r.b[field] : null, r.f) : null;
+  };
+  const start = Math.max(seriesA[0].t, seriesB[0].t) + maxLagH * HOUR;
+  const end = Math.min(seriesA[seriesA.length - 1].t, seriesB[seriesB.length - 1].t) - maxLagH * HOUR;
+  if (end <= start) return 0;
+
+  const step = 15 * MIN;
+  let best = { lag: 0, score: -Infinity };
+  for (let lag = -maxLagH * HOUR; lag <= maxLagH * HOUR; lag += 6 * MIN) {
+    let sa = 0, sb = 0, saa = 0, sbb = 0, sab = 0, n = 0;
+    for (let t = start; t <= end; t += step) {
+      const x = at(seriesA, t), y = at(seriesB, t + lag);
+      if (x == null || y == null) continue;
+      sa += x; sb += y; saa += x * x; sbb += y * y; sab += x * y; n++;
+    }
+    if (n < 8) continue;
+    const cov = sab / n - (sa / n) * (sb / n);
+    const va = saa / n - (sa / n) ** 2, vb = sbb / n - (sb / n) ** 2;
+    if (va <= 0 || vb <= 0) continue;
+    const r = cov / Math.sqrt(va * vb);
+    if (r > best.score) best = { lag, score: r };
+  }
+  return best.score > 0.5 ? best.lag : 0;
+}
+
+/**
+ * Blend two gauge series at one instant.
+ *
+ * Naively averaging the two values destroys amplitude: the series are phase
+ * shifted, so a weighted sum interferes destructively and mid-channel range
+ * comes out smaller than at either gauge. Instead each series is time-shifted
+ * toward the target position first, so the two are in phase when blended.
+ * Amplitude is then preserved and phase still advances upriver.
+ *
+ * @param packs  { [gaugeId]: {series, ...} }
+ * @param fields numeric fields to blend; names ending in Deg blend angularly
+ */
+function gaugeValueAt(packs, brk, t, fields, lag) {
+  if (!brk) return null;
+  const sampleOne = (g, shift) => {
+    const pack = packs[g.id];
+    if (!pack || !pack.series) return null;
+    const s = sampleSeries(pack.series, t + (shift || 0));
+    if (!s) return null;
+    const o = {};
+    for (const f of fields)
+      o[f] = f.endsWith('Deg')
+        ? lerpAngle(s.a[f], s.b ? s.b[f] : null, s.f)
+        : lerpNum(s.a[f], s.b ? s.b[f] : null, s.f);
+    return o;
+  };
+
+  if (!brk.b) {
+    const A = sampleOne(brk.a, 0);
+    if (!A) return null;
+    return { ...A, gauges: [brk.a.name], interpolated: false, extrapolated: brk.extrapolated };
+  }
+
+  // Shift A forward by w*lag and B back by (1-w)*lag so both represent the
+  // same point in the tidal cycle at the target position.
+  const L = lag || 0, w = brk.w;
+  const A = sampleOne(brk.a, -w * L);
+  const B = sampleOne(brk.b, (1 - w) * L);
+  if (!A && !B) return null;
+  if (!A) return { ...B, gauges: [brk.b.name], interpolated: false, partial: true };
+  if (!B) return { ...A, gauges: [brk.a.name], interpolated: false, partial: true };
+
+  const out = {};
+  for (const f of fields)
+    out[f] = f.endsWith('Deg') ? lerpAngle(A[f], B[f], w) : lerpNum(A[f], B[f], w);
+  return {
+    ...out, gauges: [brk.a.name, brk.b.name], weight: w, lagMs: L,
+    interpolated: true, extrapolated: false
+  };
+}
+
+/* ----------------------------------------------------- ENVIRONMENT --------
+   Consumes normalized series from providers and matches them against the
+   solved timeline. Never invents a value; a gap stays a gap.
+   -------------------------------------------------------------------------*/
+
+function sampleSeries(series, t) {
+  if (!series || !series.length) return null;
+  if (t < series[0].t || t > series[series.length - 1].t) return null;
+  for (let i = 0; i < series.length - 1; i++) {
+    if (t >= series[i].t && t <= series[i + 1].t) {
+      const f = (t - series[i].t) / (series[i + 1].t - series[i].t);
+      return { a: series[i], b: series[i + 1], f, exact: f < 0.5 ? series[i] : series[i + 1] };
+    }
+  }
+  return { a: series[series.length - 1], b: null, f: 0, exact: series[series.length - 1] };
+}
+
+function lerpNum(a, b, f) {
+  if (a == null || b == null) return a != null ? a : b;
+  return a + (b - a) * f;
+}
+
+function lerpAngle(a, b, f) {
+  if (a == null || b == null) return a != null ? a : b;
+  return norm360(a + relAngle(a, b) * f);
+}
+
+/** Find extreme (max or min) of a numeric field within a window. */
+function findExtreme(series, field, window, mode) {
+  if (!series) return null;
+  const inWin = series.filter(s => s.t >= window.start && s.t <= window.end);
+  if (!inWin.length) return null;
+  let best = inWin[0];
+  for (const s of inWin) {
+    const v = s[field], bv = best[field];
+    if (v == null) continue;
+    if (bv == null) { best = s; continue; }
+    if (mode === 'max' ? v > bv : v < bv) best = s;
+  }
+  return best;
+}
+
+/** Turning points in tide height: the highs and lows inside the window. */
+function findTurns(series, field, window) {
+  const out = [];
+  if (!series) return out;
+  for (let i = 1; i < series.length - 1; i++) {
+    const p = series[i - 1][field], c = series[i][field], n = series[i + 1][field];
+    if (p == null || c == null || n == null) continue;
+    if (c > p && c >= n) out.push({ ...series[i], kind: 'HIGH' });
+    if (c < p && c <= n) out.push({ ...series[i], kind: 'LOW' });
+  }
+  return out.filter(x => x.t >= window.start && x.t <= window.end);
+}
+
+/** Slack water crossings — where signed current changes sign. */
+function findSlacks(series, window) {
+  const out = [];
+  if (!series) return out;
+  for (let i = 0; i < series.length - 1; i++) {
+    const a = series[i].signedKts, b = series[i + 1].signedKts;
+    if (a == null || b == null) continue;
+    if ((a <= 0 && b > 0) || (a >= 0 && b < 0)) {
+      const f = Math.abs(a) / (Math.abs(a) + Math.abs(b) || 1);
+      const t = series[i].t + f * (series[i + 1].t - series[i].t);
+      if (t >= window.start && t <= window.end) {
+        out.push({ t, kind: 'SLACK', becoming: b > 0 ? 'FLOOD' : 'EBB' });
+      }
+    }
+  }
+  return out;
+}
+
+/* ------------------------------------------------- PILOT TRANSFER ---------
+   Lee-side determination.
+
+   Convention, stated once and used everywhere:
+     seasFrom  = compass bearing the seas are COMING FROM
+     heading   = vessel's true heading (direction of travel, TOWARD)
+     rel       = relAngle(heading, seasFrom), in (-180, 180]
+       rel < 0  -> seas are off the PORT side  -> lee is STARBOARD
+       rel > 0  -> seas are off the STARBOARD side -> lee is PORT
+       |rel| < 25 or > 155 -> head or following seas, no useful lee
+
+   The vessel is assumed to be worked to roughly 60 deg off the bow from the
+   dominant sea, per the operational rule, but the actual heading used is
+   whichever of the two candidate headings is closer to the outbound course.
+   -------------------------------------------------------------------------*/
+
+const AMBIGUOUS_BOW = 25;    // deg either side of dead ahead with no clear lee
+const AMBIGUOUS_STERN = 155; // deg either side of dead astern with no clear lee
+const CONFLICT_SPREAD = 50;  // deg of disagreement that triggers pilot review
+
+function leeFromRelative(rel) {
+  const mag = Math.abs(rel);
+  if (mag < AMBIGUOUS_BOW) return { side: null, reason: 'HEAD_SEA' };
+  if (mag > AMBIGUOUS_STERN) return { side: null, reason: 'FOLLOWING_SEA' };
+  return { side: rel < 0 ? 'STARBOARD' : 'PORT', reason: 'CLEAR' };
+}
+
+/** Candidate transfer headings that put the dominant sea ~60 off the bow. */
+function transferHeadings(seasFromDeg, offset = 60) {
+  return [norm360(seasFromDeg - offset), norm360(seasFromDeg + offset)];
+}
+
+/**
+ * @param inp.seas   {dir: FROM-direction, heightFt}  dominant combined sea
+ * @param inp.swell  {dir: FROM-direction, heightFt}
+ * @param inp.wind   {dir: FROM-direction, speedKts}
+ * @param inp.baseCourse  outbound channel course at the transfer point
+ */
+function recommendLadder(inp) {
+  const contributors = [];
+  const seasFrom = inp.seas && inp.seas.dir ? asFrom(inp.seas.dir).deg : null;
+  const swellFrom = inp.swell && inp.swell.dir ? asFrom(inp.swell.dir).deg : null;
+  const windFrom = inp.wind && inp.wind.dir ? asFrom(inp.wind.dir).deg : null;
+
+  // Dominant driver: whichever of swell/wind-sea is physically larger.
+  const swellH = inp.swell && inp.swell.heightFt != null ? inp.swell.heightFt : 0;
+  const seaH = inp.seas && inp.seas.heightFt != null ? inp.seas.heightFt : 0;
+  const dominantFrom = (swellH > seaH && swellFrom != null) ? swellFrom
+                     : (seasFrom != null ? seasFrom : swellFrom);
+  const dominantLabel = (swellH > seaH && swellFrom != null) ? 'Swell' : 'Combined sea';
+
+  if (dominantFrom == null) {
+    return { status: 'NO_DATA', side: null, notes: ['No sea, swell or wind direction available.'] };
+  }
+
+  const candidates = transferHeadings(dominantFrom, inp.offsetDeg || 60);
+  const base = inp.baseCourse != null ? inp.baseCourse : candidates[0];
+  const heading = Math.abs(relAngle(base, candidates[0])) <= Math.abs(relAngle(base, candidates[1]))
+    ? candidates[0] : candidates[1];
+
+  const evaluate = (label, fromDeg, weightNote) => {
+    if (fromDeg == null) return null;
+    const rel = relAngle(heading, fromDeg);
+    const lee = leeFromRelative(rel);
+    return { label, fromDeg, rel, side: lee.side, reason: lee.reason, weightNote };
+  };
+
+  const rows = [
+    evaluate('Combined sea', seasFrom, seaH ? `${seaH.toFixed(1)} ft` : ''),
+    evaluate('Swell', swellFrom, swellH ? `${swellH.toFixed(1)} ft` : ''),
+    evaluate('Wind', windFrom, inp.wind && inp.wind.speedKts ? `${Math.round(inp.wind.speedKts)} kt` : '')
+  ].filter(Boolean);
+  contributors.push(...rows);
+
+  const sides = rows.filter(r => r.side).map(r => r.side);
+  const unique = [...new Set(sides)];
+
+  // Directional spread among available drivers.
+  const dirs = [seasFrom, swellFrom, windFrom].filter(d => d != null);
+  let spread = 0;
+  for (let i = 0; i < dirs.length; i++)
+    for (let j = i + 1; j < dirs.length; j++)
+      spread = Math.max(spread, Math.abs(relAngle(dirs[i], dirs[j])));
+
+  const notes = [];
+  let status = 'CLEAR', side = null;
+
+  if (!unique.length) {
+    status = 'MIXED';
+    notes.push('Dominant sea falls near dead ahead or dead astern at the assumed heading — no useful lee is produced.');
+  } else if (unique.length > 1) {
+    status = 'MIXED';
+    const disagree = rows.filter(r => r.side).map(r => `${r.label} favours ${r.side.toLowerCase()}`);
+    notes.push('Environmental drivers disagree: ' + disagree.join('; ') + '.');
+  } else {
+    side = unique[0];
+    if (spread > CONFLICT_SPREAD) {
+      status = 'MIXED';
+      notes.push(`Sea, swell and wind directions span ${Math.round(spread)}° — they agree on the lee side but the sea state is confused.`);
+    }
+  }
+
+  const domRel = relAngle(heading, dominantFrom);
+
+  return {
+    status, side, heading, dominantFrom, dominantLabel,
+    relativeAngle: domRel, candidates, spread, contributors, notes,
+    baseCourse: inp.baseCourse
+  };
+}
+
+/* ----------------------------------------------------------- ALERTS -------*/
+
+const DEFAULT_THRESHOLDS = {
+  windKts: 25,
+  gustKts: 33,
+  currentKts: 2.0,
+  seasFt: 5.0,
+  swellFt: 4.0,
+  visibilityNm: 1.0,
+  minTideFt: 0.0
+};
+
+/* ------------------------------------------------------------ EXPORTS -----*/
+
+
+/* ==== END ENGINE ==== */
+
+/* =========================================================================
+   STORAGE — guarded. Persists on a real host; degrades to memory anywhere
+   that blocks it, without throwing.
+   ======================================================================= */
+const Store = (() => {
+  const mem = {};
+  let ok = false;
+  try { localStorage.setItem('__t', '1'); localStorage.removeItem('__t'); ok = true; } catch (e) { ok = false; }
+  return {
+    persistent: ok,
+    get(k, fb) {
+      try { const v = ok ? localStorage.getItem(k) : mem[k]; return v == null ? fb : JSON.parse(v); }
+      catch (e) { return fb; }
+    },
+    set(k, v) {
+      try { const s = JSON.stringify(v); if (ok) localStorage.setItem(k, s); else mem[k] = s; } catch (e) {}
+    }
+  };
+})();
+
+/* =========================================================================
+   DATA SOURCE ARCHITECTURE
+   Each provider returns normalized series. The engines never see a raw
+   response shape. Phase 1 ships MOCK providers only; swapping in a NOAA
+   adapter means implementing the same three members and nothing else.
+
+   Contract:
+     id, kind, station(s), label
+     async load(stationId, window) -> {
+       series: [ {t, ...normalizedFields} ],
+       issued: epoch|null, retrieved: epoch, source: string, quality: 'MOCK'|'LIVE'
+     }
+   Normalized fields by kind:
+     tide     -> heightFt
+     current  -> signedKts (+ = flood, toward increasing mile), setDeg (TOWARD)
+     weather  -> windKts, gustKts, windFromDeg, visibilityNm, tempF, wx
+     wave     -> seaFt, waveFromDeg, wavePeriodS, swellFt, swellFromDeg, swellPeriodS
+   ======================================================================= */
+
+const STATIONS = {
+  T_PASS:     { name: 'Calcasieu Pass — tide',        kind: 'tide',    coops: '8768094' },
+  T_CAM:      { name: 'Calcasieu Pass — tide',        kind: 'tide',    coops: '8768094' },
+  T_LC:       { name: 'Lake Charles — tide',          kind: 'tide',    coops: '8767816' },
+  C_PASS:     { name: 'Calcasieu Pass — current',     kind: 'current', coops: null },
+  W_OFFSHORE: { name: 'Offshore forecast',            kind: 'weather' },
+  W_PASS:     { name: 'Lower channel forecast',       kind: 'weather' },
+  W_LC:       { name: 'Upper channel forecast',       kind: 'weather' },
+  V_OFFSHORE: { name: 'Offshore wave forecast',       kind: 'wave' }
+};
+
+/* Live mode resolves forecasts by position rather than by zone, but rounds the
+   position to a grid so nearby waypoints share one fetch. 0.05 deg is roughly
+   3 nm — finer than any real gradient in wind along this channel, and it keeps
+   a full-channel brief to a couple of dozen requests instead of ninety.
+   Waves are coarser still: they only matter offshore, where the field is
+   smooth over tens of miles. */
+const FORECAST_GRID = { weather: 0.05, visibility: 0.05, wave: 0.25 };
+function forecastKey(node, kind) {
+  const g = FORECAST_GRID[kind] || 0.05;
+  const r = v => (Math.round(v / g) * g).toFixed(3);
+  return kind + ':' + r(node.lat) + ',' + r(node.lon);
+}
+
+/* ---------------------------------------------------------------------------
+   LIVE ADAPTERS
+   Each returns the same normalized shape, so the engines never see a raw
+   response. Any failure is recorded as a failure — never silently filled in.
+   ------------------------------------------------------------------------- */
+
+const HTTP_TIMEOUT = 12000;
+
+/* How far a single gauge's reading may be carried past the end of its chain.
+   Water level responds to the same basin-wide forcing and travels a long way
+   up a channel like this, so a generous reach is reasonable. Current does not:
+   it depends on local cross-section and freshwater flow, and a reading at the
+   mouth says little about a river reach twenty-five miles inland. Beyond the
+   reach the brief says no data instead of guessing. */
+const DEFAULT_REACH = { tide: 12, current: 6 };
+
+async function getJSON(url, opts) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), HTTP_TIMEOUT);
+  try {
+    const r = await fetch(url, { signal: ctl.signal, headers: (opts && opts.headers) || {} });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return await r.json();
+  } finally { clearTimeout(timer); }
+}
+
+/* NWS gridpoint values arrive as ISO intervals: "2026-08-11T18:00:00+00:00/PT6H".
+   Expand each into hourly samples so everything downstream sees a flat series. */
+function expandNwsInterval(validTime) {
+  const [startStr, durStr] = validTime.split('/');
+  const start = Date.parse(startStr);
+  const m = /P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?/.exec(durStr || 'PT1H') || [];
+  const hours = (+(m[1] || 0)) * 24 + (+(m[2] || 0)) + (+(m[3] || 0)) / 60;
+  return { start, hours: Math.max(1, Math.round(hours)) };
+}
+
+function nwsSeries(prop, convert) {
+  const out = [];
+  if (!prop || !prop.values) return out;
+  for (const v of prop.values) {
+    const { start, hours } = expandNwsInterval(v.validTime);
+    for (let h = 0; h < hours; h++)
+      out.push({ t: start + h * HOUR, v: v.value == null ? null : convert(v.value) });
+  }
+  return out;
+}
+
+function mergeSeries(parts) {
+  const byTime = new Map();
+  for (const [field, series] of Object.entries(parts))
+    for (const s of series) {
+      if (!byTime.has(s.t)) byTime.set(s.t, { t: s.t });
+      byTime.get(s.t)[field] = s.v;
+    }
+  return [...byTime.values()].sort((a, b) => a.t - b.t);
+}
+
+const KMH_TO_KT = 0.539957, M_TO_NM = 1 / 1852;
+
+/* ---- NWS gridded forecast: wind, gusts, visibility, thunder ---- */
+const nwsGridCache = new Map();
+const NWSWeather = {
+  kind: 'weather', quality: 'LIVE',
+  label: 'NWS gridded forecast (api.weather.gov)',
+  async load(stationId, win, node) {
+    const lat = node.lat.toFixed(4), lon = node.lon.toFixed(4);
+    let gridUrl = nwsGridCache.get(stationId);
+    if (!gridUrl) {
+      const pt = await getJSON(`https://api.weather.gov/points/${lat},${lon}`);
+      gridUrl = pt.properties.forecastGridData;
+      nwsGridCache.set(stationId, gridUrl);
+    }
+    const g = await getJSON(gridUrl);
+    const p = g.properties;
+    const series = mergeSeries({
+      windKts: nwsSeries(p.windSpeed, v => v * KMH_TO_KT),
+      dewpointF: nwsSeries(p.dewpoint, v => v * 9 / 5 + 32),
+      humidityPct: nwsSeries(p.relativeHumidity, v => v),
+      gustKts: nwsSeries(p.windGust, v => v * KMH_TO_KT),
+      windFromDeg: nwsSeries(p.windDirection, v => v),
+      visibilityNm: nwsSeries(p.visibility, v => v * M_TO_NM),
+      tempF: nwsSeries(p.temperature, v => v * 9 / 5 + 32),
+      thunderPct: nwsSeries(p.probabilityOfThunder, v => v),
+      popPct: nwsSeries(p.probabilityOfPrecipitation, v => v)
+    });
+    return {
+      series, issued: Date.parse(p.updateTime), retrieved: Date.now(),
+      source: 'NWS ' + (p.gridId || '') + ' gridded forecast', quality: 'LIVE'
+    };
+  }
+};
+
+/* ---- Open-Meteo marine: waves and swell, split ---- */
+const OpenMeteoWave = {
+  kind: 'wave', quality: 'LIVE',
+  label: 'Open-Meteo marine (WaveWatch III)',
+  async load(stationId, win, node) {
+    const u = new URL('https://marine-api.open-meteo.com/v1/marine');
+    u.searchParams.set('latitude', node.lat.toFixed(4));
+    u.searchParams.set('longitude', node.lon.toFixed(4));
+    u.searchParams.set('hourly',
+      'wave_height,wave_direction,wave_period,swell_wave_height,swell_wave_direction,swell_wave_period');
+    u.searchParams.set('length_unit', 'imperial');
+    u.searchParams.set('timezone', 'UTC');
+    u.searchParams.set('forecast_days', '3');
+    const d = await getJSON(u.toString());
+    const h = d.hourly;
+    if (!h || !h.time) throw new Error('no hourly block');
+    const series = h.time.map((iso, i) => ({
+      t: Date.parse(iso + 'Z'),
+      seaFt: h.wave_height[i],
+      waveFromDeg: h.wave_direction[i],
+      wavePeriodS: h.wave_period[i],
+      swellFt: h.swell_wave_height[i],
+      swellFromDeg: h.swell_wave_direction[i],
+      swellPeriodS: h.swell_wave_period[i]
+    })).filter(r => isFinite(r.t));
+    return {
+      series, issued: null, retrieved: Date.now(),
+      source: 'Open-Meteo marine', quality: 'LIVE'
+    };
+  }
+};
+
+/* ---- NOAA CO-OPS tide predictions ---- */
+function coopsStamp(epoch) {
+  const d = new Date(epoch);
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+}
+
+const CoopsTide = {
+  kind: 'tide', quality: 'LIVE',
+  label: 'NOAA CO-OPS tide predictions',
+  async load(stationId, win, node, gauge) {
+    const st = gauge && gauge.tide;
+    if (!st) throw new Error('no CO-OPS tide id set for this gauge');
+    const u = new URL('https://api.tidesandcurrents.noaa.gov/api/prod/datagetter');
+    const q = {
+      product: 'predictions', application: 'CalcasieuTransitBrief', station: st,
+      begin_date: coopsStamp(win.start - 3 * HOUR), end_date: coopsStamp(win.end + 3 * HOUR),
+      datum: 'MLLW', time_zone: 'gmt', units: 'english', interval: 'h', format: 'json'
+    };
+    for (const [k, v] of Object.entries(q)) u.searchParams.set(k, v);
+    const d = await getJSON(u.toString());
+    if (d.error) throw new Error(d.error.message || 'CO-OPS error');
+    const series = (d.predictions || []).map(r => ({
+      t: Date.parse(r.t.replace(' ', 'T') + 'Z'), heightFt: parseFloat(r.v)
+    })).filter(r => isFinite(r.t));
+    if (!series.length) throw new Error('no predictions returned');
+    return {
+      series, issued: null, retrieved: Date.now(),
+      source: 'NOAA CO-OPS ' + st + ' (harmonic, MLLW)', quality: 'LIVE'
+    };
+  }
+};
+
+/* ---- Open-Meteo visibility ----
+   NDFD's visibility grid is frequently unpopulated. This fills that gap; it is
+   model visibility, so it is labelled as a model figure wherever it is used. */
+const OpenMeteoVisibility = {
+  kind: 'visibility', quality: 'LIVE',
+  label: 'HRRR visibility',
+
+  async fetchModel(node, model) {
+    const u = new URL('https://api.open-meteo.com/v1/forecast');
+    u.searchParams.set('latitude', node.lat.toFixed(4));
+    u.searchParams.set('longitude', node.lon.toFixed(4));
+    u.searchParams.set('hourly', 'visibility,temperature_2m,dew_point_2m,wind_speed_10m,cloud_cover_low');
+    u.searchParams.set('temperature_unit', 'fahrenheit');
+    u.searchParams.set('wind_speed_unit', 'kn');
+    u.searchParams.set('timezone', 'UTC');
+    u.searchParams.set('forecast_days', '2');
+    if (model) u.searchParams.set('models', model);
+    const d = await getJSON(u.toString());
+    const h = d.hourly;
+    if (!h || !h.time) throw new Error('no hourly block');
+    const series = h.time.map((iso, i) => ({
+      t: Date.parse(iso + 'Z'),
+      visibilityNm: h.visibility[i] != null ? h.visibility[i] / 1852 : null,
+      lowCloudPct: h.cloud_cover_low ? h.cloud_cover_low[i] : null,
+      modelTempF: h.temperature_2m[i],
+      modelDewF: h.dew_point_2m[i],
+      modelWindKts: h.wind_speed_10m[i]
+    })).filter(r => isFinite(r.t));
+    const withVis = series.filter(r => r.visibilityNm != null).length;
+    return { series, withVis };
+  },
+
+  async load(stationId, win, node) {
+    /* HRRR at 3 km is the model Windy draws its fog layer from over the US, and
+       it carries an explicit visibility field. It only runs out to 48 h, so if
+       it has nothing for this window, fall back to the default blend rather
+       than return an empty series. */
+    let model = 'gfs_hrrr', got = null;
+    try {
+      got = await this.fetchModel(node, model);
+      if (!got.withVis) throw new Error('HRRR returned no visibility here');
+    } catch (e) {
+      model = null;
+      got = await this.fetchModel(node, null);
+    }
+    if (!got.series.length) throw new Error('no data returned');
+    return {
+      series: got.series, issued: null, retrieved: Date.now(),
+      source: model === 'gfs_hrrr' ? 'HRRR 3 km (via Open-Meteo)' : 'Open-Meteo blend',
+      model: model === 'gfs_hrrr' ? 'HRRR' : 'blend',
+      quality: 'LIVE'
+    };
+  }
+};
+
+/* ---- NOAA CO-OPS observed currents ----
+   Real-time measurements. These stop at the present moment, so they cannot
+   drive a brief for a sail time hours away. They are used to check whether
+   today's predictions are running true — wind setup and river flow routinely
+   push the real current away from the harmonic curve. */
+const CoopsCurrentObs = {
+  kind: 'currentObs', quality: 'LIVE',
+  label: 'NOAA CO-OPS observed currents',
+  async load(stationId, win, node, gauge) {
+    const st = gauge && gauge.currentObs;
+    if (!st) throw new Error('no observation station for this gauge');
+    const u = new URL('https://api.tidesandcurrents.noaa.gov/api/prod/datagetter');
+    const now = Date.now();
+    const q = {
+      product: 'currents', application: 'CalcasieuTransitBrief', station: st,
+      begin_date: coopsStamp(now - 2 * HOUR), end_date: coopsStamp(now),
+      time_zone: 'gmt', units: 'english', format: 'json'
+    };
+    for (const [k, v] of Object.entries(q)) u.searchParams.set(k, v);
+    const d = await getJSON(u.toString());
+    if (d.error) throw new Error(d.error.message || 'CO-OPS error');
+    const series = (d.data || []).map(r => ({
+      t: Date.parse(String(r.t).replace(' ', 'T') + 'Z'),
+      signedKts: parseFloat(r.s), setDeg: r.d != null ? parseFloat(r.d) : null
+    })).filter(r => isFinite(r.t) && isFinite(r.signedKts));
+    if (!series.length) throw new Error('no observations returned');
+    return { series, issued: null, retrieved: Date.now(),
+             source: 'NOAA CO-OPS ' + st + ' (observed)', quality: 'LIVE' };
+  }
+};
+
+/* ---- NOAA CO-OPS current predictions ----
+   Harmonic current stations exist only in the lower channel. Anywhere without
+   one stays an honest gap rather than borrowing a distant station. */
+const CoopsCurrent = {
+  kind: 'current', quality: 'LIVE',
+  label: 'NOAA CO-OPS current predictions',
+  async load(stationId, win, node, gauge) {
+    const st = gauge && gauge.current;
+    if (!st) throw new Error('no CO-OPS current id set for this gauge');
+    const u = new URL('https://api.tidesandcurrents.noaa.gov/api/prod/datagetter');
+    const q = {
+      product: 'currents_predictions', application: 'CalcasieuTransitBrief', station: st,
+      begin_date: coopsStamp(win.start - 3 * HOUR), end_date: coopsStamp(win.end + 3 * HOUR),
+      time_zone: 'gmt', units: 'english', interval: '30', format: 'json'
+    };
+    for (const [k, v] of Object.entries(q)) u.searchParams.set(k, v);
+    const d = await getJSON(u.toString());
+    if (d.error) throw new Error(d.error.message || 'CO-OPS error');
+    const rows = (d.current_predictions && d.current_predictions.cp) || [];
+    const series = rows.map(r => ({
+      t: Date.parse(String(r.Time).replace(' ', 'T') + 'Z'),
+      signedKts: parseFloat(r.Velocity_Major),
+      setDeg: r.meanFloodDir != null ? parseFloat(r.meanFloodDir) : null
+    })).filter(r => isFinite(r.t));
+    if (!series.length) throw new Error('no current predictions returned');
+    return {
+      series, issued: null, retrieved: Date.now(),
+      source: 'NOAA CO-OPS ' + st + ' (harmonic current)', quality: 'LIVE'
+    };
+  }
+};
+
+/* Deterministic mock generator, kept for offline demo and for the tests.
+   Seeded by station and day, so the same brief reproduces exactly. */
+function seeded(str) {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return () => { h = Math.imul(h ^ (h >>> 15), 2246822507); h ^= h >>> 13; return ((h >>> 0) % 10000) / 10000; };
+}
+
+const M2 = 12.4206 * HOUR;
+
+function mockProvider(kind) {
+  return {
+    kind, quality: 'MOCK', label: 'Simulated',
+    async load(stationId, win, node, gauge) {
+      const rnd = seeded('calcasieu' + Math.floor(win.start / 86400000));
+      // Upriver gauges lag the Pass by ~0.09 h per nm, and the range decays.
+      const chain = gauge ? gauge.chainNm : 26;
+      const lagH = (chain - 26) * 0.09;
+      const decay = Math.max(0.45, 1 - (chain - 26) * 0.012);
+      const phase = rnd() * M2 + lagH * HOUR;
+      const step = 30 * MIN;
+      const start = Math.floor((win.start - 2 * HOUR) / step) * step;
+      const end = win.end + 2 * HOUR;
+      const series = [];
+      const windBase = 140 + rnd() * 40;
+      const windMag = 9 + rnd() * 12;
+      for (let t = start; t <= end; t += step) {
+        const th = ((t - phase) / M2) * 2 * Math.PI;
+        const row = { t };
+        if (kind === 'tide') {
+          row.heightFt = +(1.15 + 0.95 * decay * Math.sin(th) + 0.18 * decay * Math.sin(th * 2 + 1)).toFixed(2);
+        } else if (kind === 'current') {
+          row.signedKts = +(1.75 * decay * Math.sin(th - Math.PI / 2)).toFixed(2);
+          row.setDeg = row.signedKts >= 0 ? 350 : 170;
+        } else if (kind === 'weather') {
+          const drift = (t - win.start) / (12 * HOUR);
+          const w = windMag + drift * 7 + 1.6 * Math.sin(th * 1.7);
+          row.windKts = +w.toFixed(1);
+          row.gustKts = +(w * 1.38).toFixed(1);
+          row.windFromDeg = +norm360(windBase + drift * 16 + 5 * Math.sin(th)).toFixed(0);
+          row.visibilityNm = 10;
+          row.tempF = +(66 + 8 * Math.sin((t / (24 * HOUR)) * 2 * Math.PI)).toFixed(0);
+        } else if (kind === 'wave') {
+          const drift = (t - win.start) / (12 * HOUR);
+          const w = windMag + drift * 7;
+          row.seaFt = +(0.16 * w + 0.9).toFixed(1);
+          row.waveFromDeg = +norm360(windBase + drift * 14).toFixed(0);
+          row.wavePeriodS = 6;
+          row.swellFt = +(1.6 + 0.9 * rnd()).toFixed(1);
+          row.swellFromDeg = +norm360(windBase - 12).toFixed(0);
+          row.swellPeriodS = 8;
+        }
+        series.push(row);
+      }
+      return { series, issued: start, retrieved: Date.now(),
+               source: 'Simulated — not real data', quality: 'MOCK' };
+    }
+  };
+}
+
+/* Load every station a route touches. Missing station = recorded gap. */
+const MOCK_PROVIDERS = {
+  tide: mockProvider('tide'), current: mockProvider('current'),
+  weather: mockProvider('weather'), wave: mockProvider('wave')
+};
+const LIVE_PROVIDERS = {
+  tide: CoopsTide, current: CoopsCurrent, weather: NWSWeather, wave: OpenMeteoWave
+};
+/* ---------------------------------------------------------------------------
+   CACHE
+   A brief generated alongside is meant to survive the loss of signal that
+   follows. Every successful fetch is kept; when the network fails the cached
+   copy is used and labelled CACHED with its age, never presented as fresh.
+   Nothing is ever fabricated to fill a hole.
+   ------------------------------------------------------------------------- */
+
+/* Pilot-editable speed overrides, keyed by reach name and condition. These sit
+   on top of the shipped table so a correction survives a new build of the app. */
+function speedOverrides() { return Store.get('speedOverrides', {}); }
+
+function applySpeedOverrides() {
+  const ov = speedOverrides();
+  for (const e of CHANNEL.edges) {
+    if (!e.zone) continue;
+    if (e._baseLoaded == null) { e._baseLoaded = e.loaded; e._baseLight = e.light; }
+    const L = ov[e.zone + '|LOADED'], G = ov[e.zone + '|LIGHT'];
+    e.loaded = L != null ? L : e._baseLoaded;
+    e.light  = G != null ? G : e._baseLight;
+  }
+}
+
+const CACHE_KEY = 'envCache';
+const CACHE_MAX_ENTRIES = 120;
+const STALE_AFTER = { weather: 6 * HOUR, visibility: 6 * HOUR, wave: 12 * HOUR,
+                      tide: 36 * HOUR, current: 36 * HOUR };
+
+function cacheRead() { return Store.get(CACHE_KEY, {}); }
+
+function cacheWrite(key, pack) {
+  const c = cacheRead();
+  // Trim the payload: full float precision is meaningless here and costs space.
+  c[key] = {
+    retrieved: pack.retrieved, source: pack.source, issued: pack.issued || null,
+    series: pack.series.map(r => {
+      const o = {};
+      for (const [k, v] of Object.entries(r))
+        o[k] = typeof v === 'number' && k !== 't' ? Math.round(v * 100) / 100 : v;
+      return o;
+    })
+  };
+  const keys = Object.keys(c);
+  if (keys.length > CACHE_MAX_ENTRIES) {
+    keys.sort((a, b) => (c[a].retrieved || 0) - (c[b].retrieved || 0));
+    for (const k of keys.slice(0, keys.length - CACHE_MAX_ENTRIES)) delete c[k];
+  }
+  try { Store.set(CACHE_KEY, c); } catch (e) { /* quota — drop it rather than crash */ }
+}
+
+/** Does the cached series still cover the window we need? */
+function cacheCovers(entry, win) {
+  if (!entry || !entry.series || !entry.series.length) return false;
+  return entry.series[0].t <= win.start && entry.series[entry.series.length - 1].t >= win.end;
+}
+
+function withCache(provider, kind) {
+  return {
+    kind, quality: provider.quality, label: provider.label,
+    async load(stationId, win, node, gauge) {
+      const key = kind + '|' + stationId + '|' + (node && node.id ? node.id : '');
+      try {
+        const fresh = await provider.load(stationId, win, node, gauge);
+        if (fresh && fresh.quality !== 'MOCK') cacheWrite(key, fresh);
+        return fresh;
+      } catch (err) {
+        const entry = cacheRead()[key];
+        if (!cacheCovers(entry, win)) throw err;
+        return {
+          series: entry.series, issued: entry.issued, retrieved: entry.retrieved,
+          source: entry.source, quality: 'CACHED',
+          ageMs: Date.now() - entry.retrieved,
+          stale: (Date.now() - entry.retrieved) > (STALE_AFTER[kind] || 12 * HOUR),
+          reason: String(err.message || err)
+        };
+      }
+    }
+  };
+}
+
+const CACHED_LIVE = {
+  tide: withCache(CoopsTide, 'tide'), current: withCache(CoopsCurrent, 'current'),
+  weather: withCache(NWSWeather, 'weather'), wave: withCache(OpenMeteoWave, 'wave'),
+  visibility: withCache(OpenMeteoVisibility, 'visibility'),
+  currentObs: CoopsCurrentObs   // never cached: an old observation is worthless
+};
+MOCK_PROVIDERS.currentObs = mockProvider('current');
+MOCK_PROVIDERS.visibility = mockProvider('visibility');
+
+function providers() {
+  return Store.get('liveData', false) ? CACHED_LIVE : MOCK_PROVIDERS;
+}
+
+/* Resolve which source key each node uses for each kind, then fetch each
+   unique key once. In live mode the forecast kinds key off the node's own
+   position, so a waypoint gets the forecast for where it actually is. */
+function planFetches(route, live) {
+  const need = { tide: new Map(), current: new Map(), weather: new Map(),
+                 wave: new Map(), visibility: new Map() };
+  const assign = {};
+  const gaps = [];
+  for (const p of route) {
+    assign[p.id] = {};
+    for (const k of ['tide', 'current', 'weather', 'wave', 'visibility']) {
+      const zoneKey = k === 'visibility'
+        ? (p.stations ? p.stations.weather : null)   // visibility follows the weather zone
+        : (p.stations ? p.stations[k] : null);
+      if (!zoneKey) { assign[p.id][k] = null; if (k !== 'visibility') gaps.push({ kind: k, point: p.name }); continue; }
+      // Tide and current are physically tied to a gauge; never key them off position.
+      const perNode = live && (k === 'weather' || k === 'wave' || k === 'visibility');
+      const key = perNode ? forecastKey(p, k) : zoneKey;
+      assign[p.id][k] = key;
+      if (!need[k].has(key)) need[k].set(key, { zoneKey, node: p });
+    }
+  }
+  return { need, assign, gaps };
+}
+
+async function loadEnvironment(route, win) {
+  const live = Store.get('liveData', false);
+  const P = providers();
+  const { need, assign, gaps } = planFetches(route, live);
+  // Tide and current come from the gauge chain, not per-node stations.
+  need.tide.clear(); need.current.clear();
+  const data = { tide: {}, current: {}, weather: {}, wave: {}, visibility: {} };
+  const sources = [];
+
+  const jobs = [];
+  for (const kind of Object.keys(need))
+    for (const [key, { zoneKey, node }] of need[kind])
+      jobs.push({ kind, key, zoneKey, node });
+
+  await Promise.all(jobs.map(async job => {
+    const label = (STATIONS[job.zoneKey] || {}).name || job.zoneKey;
+    const where = job.key.includes(':') ? `${label} @ ${job.node.name}` : label;
+    try {
+      const r = await P[job.kind].load(job.zoneKey, win, job.node);
+      data[job.kind][job.key] = r;
+      sources.push({ station: job.key, kind: job.kind, name: where, ...r,
+                     series: undefined, count: r.series.length });
+    } catch (e) {
+      data[job.kind][job.key] = null;
+      sources.push({ station: job.key, kind: job.kind, name: where,
+                     error: String(e.message || e), quality: 'FAILED' });
+    }
+  }));
+
+  // ---- gauge chain: tide and current, interpolated between gauges ----
+  const gauges = gaugeChain();
+  const gaugeData = { tide: {}, current: {} };
+  await Promise.all(gauges.flatMap(g => ['tide', 'current'].map(async kind => {
+    const configured = live ? g[kind] : true;
+    if (!configured) {
+      sources.push({ station: g.id, kind, name: g.name + ' — ' + kind,
+                     error: 'no CO-OPS id configured', quality: 'FAILED' });
+      return;
+    }
+    try {
+      const r = await P[kind].load(g.id, win, g, g);
+      gaugeData[kind][g.id] = r;
+      sources.push({ station: g.id, kind, name: g.name + ' — ' + kind, ...r,
+                     series: undefined, count: r.series.length });
+    } catch (e) {
+      sources.push({ station: g.id, kind, name: g.name + ' — ' + kind,
+                     error: String(e.message || e), quality: 'FAILED' });
+    }
+  })));
+
+  // Propagation lag between consecutive gauges, estimated once per brief.
+  const lags = { tide: {}, current: {} };
+  for (const kind of ['tide', 'current']) {
+    const field = kind === 'tide' ? 'heightFt' : 'signedKts';
+    const have = gauges.filter(g => gaugeData[kind][g.id]);
+    for (let i = 0; i < have.length - 1; i++) {
+      const a = have[i], b = have[i + 1];
+      lags[kind][a.id + '>' + b.id] =
+        estimateLag(gaugeData[kind][a.id].series, gaugeData[kind][b.id].series, field);
+    }
+  }
+
+  /* ---- prediction check: observed vs predicted current, right now ---- */
+  const checks = [];
+  await Promise.all(gauges.filter(g => g.currentObs).map(async g => {
+    try {
+      const obs = await P.currentObs.load(g.id, win, g, g);
+      if (!obs || !obs.series.length) return;
+      const pred = gaugeData.current[g.id];
+      const pairs = [];
+      if (pred) for (const o of obs.series) {
+        const p = sampleSeries(pred.series, o.t);
+        if (!p) continue;
+        pairs.push({ o: o.signedKts, p: lerpNum(p.a.signedKts, p.b ? p.b.signedKts : null, p.f) });
+      }
+      const latest = obs.series[obs.series.length - 1];
+      const bias = pairs.length >= 3
+        ? pairs.reduce((s, x) => s + (x.o - x.p), 0) / pairs.length : null;
+      checks.push({ gauge: g.name, at: latest.t, observedKts: latest.signedKts,
+                    biasKts: bias, samples: pairs.length });
+      sources.push({ station: g.id + '-obs', kind: 'currentObs',
+                     name: g.name + ' — observed current', ...obs,
+                     series: undefined, count: obs.series.length });
+    } catch (e) {
+      sources.push({ station: g.id + '-obs', kind: 'currentObs',
+                     name: g.name + ' — observed current',
+                     error: String(e.message || e), quality: 'FAILED' });
+    }
+  }));
+
+  const available = kind => gauges
+    .filter(g => gaugeData[kind][g.id])
+    .map(g => ({ ...g, [kind]: true }));
+
+  return { data, sources, gaps, assign, live, gauges, gaugeData, lags, checks,
+           tideGauges: available('tide'), currentGauges: available('current') };
+}
+
+/** Tide or current at a position along the channel, at an instant. */
+function chainValueAt(env, kind, chainNm, t) {
+  const list = kind === 'tide' ? env.tideGauges : env.currentGauges;
+  if (!list || !list.length) return null;
+  const reach = (Store.get('gaugeReachNm', DEFAULT_REACH) || {})[kind];
+  const brk = bracketGauges(list, chainNm, kind, reach);
+  if (!brk) return null;
+  const lag = brk.b ? (env.lags[kind][brk.a.id + '>' + brk.b.id] || 0) : 0;
+  const fields = kind === 'tide' ? ['heightFt'] : ['signedKts', 'setDeg'];
+  return gaugeValueAt(env.gaugeData[kind], brk, t, fields, lag);
+}
+
+/* =========================================================================
+   BRIEF ASSEMBLY — joins the solved timeline to the normalized environment.
+   ======================================================================= */
+
+/* ---------------------------------------------------------------------------
+   FOG RISK
+   NWS publishes no fog element, so this is DERIVED, not forecast, and is
+   labelled that way everywhere it appears. The physics is the standard one:
+   fog needs the air close to saturation and little wind to mix it out. A small
+   dewpoint depression with a light breeze is the classic signature, and over
+   the lake in winter it is advection fog off warmer water that does it.
+
+   This is an indicator to prompt a look at the satellite product and the
+   actual visibility — not a substitute for either.
+   ------------------------------------------------------------------------- */
+function fogRisk(tempF, dewF, windKts, visibilityNm, lowCloudPct) {
+  /* Model visibility is the real forecast and outranks anything inferred. When
+     HRRR says a quarter mile, that is the answer; the dewpoint reasoning only
+     fills in where the model has nothing to say. */
+  if (visibilityNm != null) {
+    if (visibilityNm <= 0.5)
+      return { level: 'HIGH', source: 'model', visibilityNm,
+               why: `model visibility ${visibilityNm.toFixed(1)} nm` };
+    if (visibilityNm <= 2)
+      return { level: 'MODERATE', source: 'model', visibilityNm,
+               why: `model visibility ${visibilityNm.toFixed(1)} nm` };
+  }
+  if (tempF == null || dewF == null) return null;
+  const spread = tempF - dewF;
+  const wind = windKts == null ? 0 : windKts;
+  let level = 'LOW';
+  if (spread <= 2 && wind <= 8) level = 'HIGH';
+  else if (spread <= 4 && wind <= 10) level = 'MODERATE';
+  else if (spread <= 6 && wind <= 6) level = 'MODERATE';
+  // Low stratus with saturated calm air is the advection case over the lake.
+  if (level === 'MODERATE' && lowCloudPct != null && lowCloudPct >= 80 && spread <= 3) level = 'HIGH';
+  const why = `air ${tempF.toFixed(0)}°F, dewpoint ${dewF.toFixed(0)}°F (${spread.toFixed(1)}° apart), wind ${wind.toFixed(0)} kt` +
+    (lowCloudPct != null && lowCloudPct >= 80 ? `, low cloud ${Math.round(lowCloudPct)}%` : '') +
+    (visibilityNm != null ? `, model visibility ${visibilityNm.toFixed(1)} nm` : '');
+  return { level, spreadF: spread, windKts: wind, visibilityNm, source: 'derived', why };
+}
+
+function conditionsAt(env, point, t) {
+  const out = { weather: null, wave: null, tide: null, current: null, missing: [] };
+
+  const pull = (kind, stationId, fields) => {
+    if (!stationId) { out.missing.push(kind); return null; }
+    const pack = env.data[kind][stationId];
+    if (!pack) { out.missing.push(kind); return null; }
+    const s = sampleSeries(pack.series, t);
+    if (!s) { out.missing.push(kind); return null; }
+    const o = { station: stationId, source: pack.source, quality: pack.quality };
+    for (const f of fields) {
+      if (f.endsWith('Deg')) o[f] = lerpAngle(s.a[f], s.b ? s.b[f] : null, s.f);
+      else o[f] = lerpNum(s.a[f], s.b ? s.b[f] : null, s.f);
+    }
+    return o;
+  };
+
+  const a = (env.assign && env.assign[point.id]) || {
+    weather: point.stations && point.stations.weather,
+    wave: point.stations && point.stations.wave,
+    tide: point.stations && point.stations.tide,
+    current: point.stations && point.stations.current
+  };
+  out.weather = pull('weather', a.weather, ['windKts', 'gustKts', 'windFromDeg', 'visibilityNm', 'tempF', 'dewpointF', 'humidityPct', 'thunderPct', 'popPct']);
+  out.visibility = pull('visibility', a.visibility, ['visibilityNm', 'lowCloudPct', 'modelTempF', 'modelDewF', 'modelWindKts']);
+
+  /* Prefer the NWS grid where it has values; fall back to the model where it
+     does not, which for visibility is most of the time. */
+  const w = out.weather, v = out.visibility;
+  if (w) {
+    if (w.visibilityNm == null && v && v.visibilityNm != null) {
+      w.visibilityNm = v.visibilityNm;
+      w.visibilityFromModel = true;
+    }
+    const tempF = w.tempF != null ? w.tempF : (v ? v.modelTempF : null);
+    const dewF = w.dewpointF != null ? w.dewpointF : (v ? v.modelDewF : null);
+    out.fog = fogRisk(tempF, dewF, w.windKts != null ? w.windKts : (v ? v.modelWindKts : null),
+                      v ? v.visibilityNm : w.visibilityNm, v ? v.lowCloudPct : null);
+  } else if (v) {
+    out.fog = fogRisk(v.modelTempF, v.modelDewF, v.modelWindKts, v.visibilityNm, v.lowCloudPct);
+  }
+  out.wave    = pull('wave',    a.wave,    ['seaFt', 'waveFromDeg', 'wavePeriodS', 'swellFt', 'swellFromDeg', 'swellPeriodS']);
+  const chainNm = point.chainNm != null ? point.chainNm : 0;
+  out.tide    = chainValueAt(env, 'tide', chainNm, t);
+  out.current = chainValueAt(env, 'current', chainNm, t);
+  if (!out.tide) out.missing.push('tide');
+  if (!out.current) out.missing.push('current');
+  return out;
+}
+
+function buildBrief(input) {
+  const tz = CHANNEL.meta.timezone;
+  const thresholds = Store.get('thresholds', DEFAULT_THRESHOLDS);
+
+  // Pass 1: solve with no current so we know the rough window to fetch.
+  const rough = solveTransit({ fromId: input.fromId, toId: input.toId, sailEpoch: input.sailEpoch, applyCurrent: false, speedOverride: input.speedOverride, condition: input.condition });
+  const win = { start: input.sailEpoch - HOUR, end: rough.endEpoch + 2 * HOUR };
+
+  return loadEnvironment(rough.waypoints.map(w => w.point), win).then(env => {
+    // Pass 2: re-solve, now with real current in the loop.
+    // Current is sampled at the vessel's position along the channel, not at a
+    // gauge — the solver passes the leg midpoint's chainage.
+    const currentAt = (chainKey, t) => {
+      const chainNm = parseFloat(chainKey);
+      if (!isFinite(chainNm)) return null;
+      return chainValueAt(env, 'current', chainNm, t);
+    };
+    const transit = solveTransit({
+      fromId: input.fromId, toId: input.toId, sailEpoch: input.sailEpoch,
+      speedOverride: input.speedOverride, currentAt, condition: input.condition
+    });
+
+    // Per-waypoint conditions
+    const stops = transit.waypoints.map(w => ({
+      ...w, cond: conditionsAt(env, w.point, w.eta)
+    }));
+
+    // --- tide and current as the vessel actually experiences them ---
+    // Rather than reading events off one gauge, walk the timeline and sample
+    // the interpolated field at wherever the vessel is. High water then means
+    // high water at the ship, and its location comes out for free.
+    const STEP = 6 * MIN;
+    const vesselTide = [], vesselCurrent = [];
+    for (let t = transit.underwayEpoch; t <= transit.endEpoch + STEP; t += STEP) {
+      const loc = locateAt(transit, t);
+      if (!loc) continue;
+      const chainNm = loc.before && loc.after
+        ? loc.before.point.chainNm + loc.fraction * (loc.after.point.chainNm - loc.before.point.chainNm)
+        : (loc.before || loc.after).point.chainNm;
+      if (chainNm == null) continue;
+      const td = chainValueAt(env, 'tide', chainNm, t);
+      if (td && td.heightFt != null) vesselTide.push({ t, heightFt: td.heightFt, gauges: td.gauges });
+      const cu = chainValueAt(env, 'current', chainNm, t);
+      if (cu && cu.signedKts != null) vesselCurrent.push({ t, signedKts: cu.signedKts, gauges: cu.gauges });
+    }
+
+    const window = { start: transit.underwayEpoch, end: transit.endEpoch };
+
+    const tideEvents = findTurns(vesselTide, 'heightFt', window).map(turn => ({
+      t: turn.t, kind: turn.kind, heightFt: turn.heightFt,
+      stationName: (turn.gauges || []).join(' + ') || 'interpolated',
+      location: locateAt(transit, turn.t)
+    }));
+
+    const currentEvents = [];
+    let maxCurrent = null;
+    for (const sl of findSlacks(vesselCurrent, window))
+      currentEvents.push({ t: sl.t, kind: 'SLACK', becoming: sl.becoming,
+                           location: locateAt(transit, sl.t) });
+    for (const [x, label] of [[findExtreme(vesselCurrent, 'signedKts', window, 'max'), 'MAX FLOOD'],
+                              [findExtreme(vesselCurrent, 'signedKts', window, 'min'), 'MAX EBB']]) {
+      if (!x || x.signedKts == null || Math.abs(x.signedKts) < 0.15) continue;
+      const ev = { t: x.t, kind: label, kts: Math.abs(x.signedKts),
+                   stationName: (x.gauges || []).join(' + '),
+                   location: locateAt(transit, x.t) };
+      currentEvents.push(ev);
+      if (!maxCurrent || ev.kts > maxCurrent.kts) maxCurrent = ev;
+    }
+    tideEvents.sort((a, b) => a.t - b.t);
+    currentEvents.sort((a, b) => a.t - b.t);
+
+    // --- worst wind across the transit ---
+    let maxWind = null;
+    for (const s of stops) {
+      const w = s.cond.weather;
+      if (!w || w.windKts == null) continue;
+      if (!maxWind || w.windKts > maxWind.windKts) maxWind = { ...w, at: s.point.name, t: s.eta };
+    }
+
+    // --- pilot transfer ---
+    const last = stops[stops.length - 1];
+    let ladder = null;
+    if (last.point.type === 'PILOT_STATION') {
+      const wv = last.cond.wave, wd = last.cond.weather;
+      ladder = recommendLadder({
+        seas:  wv && wv.waveFromDeg  != null ? { dir: dir(wv.waveFromDeg, FROM),  heightFt: wv.seaFt }   : null,
+        swell: wv && wv.swellFromDeg != null ? { dir: dir(wv.swellFromDeg, FROM), heightFt: wv.swellFt } : null,
+        wind:  wd && wd.windFromDeg  != null ? { dir: dir(wd.windFromDeg, FROM),  speedKts: wd.windKts } : null,
+        baseCourse: last.legIn ? last.legIn.course : null
+      });
+      ladder.eta = last.eta;
+      ladder.conditions = { ...(wv || {}), ...(wd || {}) };
+    }
+
+    // --- alerts ---
+    const alerts = [];
+    if (maxWind && maxWind.windKts >= thresholds.windKts)
+      alerts.push({ t: 'Strong wind', d: `${Math.round(maxWind.windKts)} kt from ${compass(maxWind.windFromDeg)} near ${maxWind.at} around ${fmtClock(maxWind.t, tz)}.` });
+
+    if (maxCurrent && maxCurrent.kts >= thresholds.currentKts)
+      alerts.push({ t: 'Strong current', d: `${maxCurrent.kind.toLowerCase()} ${maxCurrent.kts.toFixed(1)} kt at ${fmtClock(maxCurrent.t, tz)}. ${maxCurrent.location.label}.` });
+    if (last.cond.wave && last.cond.wave.seaFt >= thresholds.seasFt)
+      alerts.push({ t: 'Pilot transfer', d: `Seas ${last.cond.wave.seaFt.toFixed(1)} ft at the station around ${fmtClock(last.eta, tz)}.` });
+    if (last.cond.wave && last.cond.wave.swellFt >= thresholds.swellFt)
+      alerts.push({ t: 'Swell', d: `Swell ${last.cond.wave.swellFt.toFixed(1)} ft from ${compass(last.cond.wave.swellFromDeg)} at the station.` });
+    /* Weather events are reported as a window along the transit — where it
+       starts, where it is worst — rather than a single worst number, because
+       what a pilot needs is when and where, not just how much. */
+    const spanOf = (test, valueOf) => {
+      let first = null, last = null, peak = null;
+      for (const st of stops) {
+        if (!test(st)) continue;
+        if (!first) first = st;
+        last = st;
+        const v = valueOf(st);
+        if (peak == null || v > peak.v) peak = { v, st };
+      }
+      return first ? { first, last, peak } : null;
+    };
+    const spanText = sp => sp.first === sp.last
+      ? `near ${sp.first.point.name} around ${fmtClock(sp.first.eta, tz)}`
+      : `from ${sp.first.point.name} ${fmtClock(sp.first.eta, tz)} to ${sp.last.point.name} ${fmtClock(sp.last.eta, tz)}`;
+
+    const visSpan = spanOf(
+      st => st.cond.weather && st.cond.weather.visibilityNm != null &&
+            st.cond.weather.visibilityNm <= thresholds.visibilityNm,
+      st => -st.cond.weather.visibilityNm);
+    if (visSpan)
+      alerts.push({ t: 'Reduced visibility', d:
+        `Down to ${(-visSpan.peak.v).toFixed(1)} nm, ${spanText(visSpan)}. Worst near ${visSpan.peak.st.point.name} at ${fmtClock(visSpan.peak.st.eta, tz)}.` });
+
+    const fogSpan = spanOf(
+      st => st.cond.fog && st.cond.fog.level === 'HIGH',
+      st => -st.cond.fog.spreadF);
+    if (fogSpan)
+      alerts.push({ t: 'Fog risk', d:
+        (fogSpan.peak.st.cond.fog.source === 'model'
+          ? `Model forecasts fog ${spanText(fogSpan)} — ${esc(fogSpan.peak.st.cond.fog.why)}. HRRR visibility; confirm against the satellite product.`
+          : `Conditions favour fog ${spanText(fogSpan)} — ${esc(fogSpan.peak.st.cond.fog.why)}. Derived from dewpoint and wind, not a fog forecast; check the satellite product.`) });
+    else {
+      const modSpan = spanOf(st => st.cond.fog && st.cond.fog.level === 'MODERATE', st => -st.cond.fog.spreadF);
+      if (modSpan)
+        alerts.push({ info: true, t: 'Some fog potential', d:
+          `Air and dewpoint closing ${spanText(modSpan)}. Worth a look at the satellite product.` });
+    }
+
+    const thunderSpan = spanOf(
+      st => st.cond.weather && st.cond.weather.thunderPct != null && st.cond.weather.thunderPct >= 30,
+      st => st.cond.weather.thunderPct);
+    if (thunderSpan)
+      alerts.push({ t: 'Thunderstorms', d:
+        `Up to ${Math.round(thunderSpan.peak.v)}% chance, ${spanText(thunderSpan)}.` });
+
+    const gustSpan = spanOf(
+      st => st.cond.weather && st.cond.weather.gustKts != null && st.cond.weather.gustKts >= thresholds.gustKts,
+      st => st.cond.weather.gustKts);
+    if (gustSpan)
+      alerts.push({ t: 'Gusts', d:
+        `To ${Math.round(gustSpan.peak.v)} kt, ${spanText(gustSpan)}.` });
+    if (ladder && ladder.status === 'MIXED')
+      alerts.push({ t: 'Ladder review', d: ladder.notes.join(' ') });
+    const lowTide = tideEvents.filter(e => e.kind === 'LOW').sort((a, b) => a.heightFt - b.heightFt)[0];
+    if (lowTide && lowTide.heightFt <= thresholds.minTideFt)
+      alerts.push({ t: 'Low water', d: `${lowTide.heightFt.toFixed(1)} ft at ${fmtClock(lowTide.t, tz)}. ${lowTide.location.label}.` });
+
+    /* Observations vs predictions. Wind setup and river flow routinely push the
+       real current off the harmonic curve; if they have today, say so rather
+       than presenting the prediction as fact. */
+    for (const c of (env.checks || [])) {
+      if (c.biasKts == null) continue;
+      if (Math.abs(c.biasKts) >= 0.4)
+        alerts.push({ t: 'Current running off prediction', d:
+          `At ${c.gauge} the observed current is ${Math.abs(c.biasKts).toFixed(1)} kt ` +
+          `${c.biasKts > 0 ? 'more flood' : 'more ebb'} than predicted over the last two hours. ` +
+          `Treat the predicted current below as a guide only.` });
+    }
+
+    /* Where the gauge chain does not reach, say so rather than leave a blank. */
+    let noTide = 0, noCurrent = 0;
+    for (const st of stops) {
+      if (!st.cond.tide) noTide++;
+      if (!st.cond.current) noCurrent++;
+    }
+    if (noCurrent)
+      alerts.push({ info: true, t: 'No current data', d:
+        `${noCurrent} of ${stops.length} waypoints lie beyond the current gauges. Those ETAs assume slack water.` });
+    if (noTide)
+      alerts.push({ info: true, t: 'No tide data', d:
+        `${noTide} of ${stops.length} waypoints lie beyond the tide gauges.` });
+
+    return { input, transit, stops, env, tideEvents, currentEvents, maxCurrent,
+             maxWind, ladder, alerts, tz, thresholds, window, currentAt };
+  });
+}
+
+/* =========================================================================
+   PRESENTATION
+   ======================================================================= */
+
+const PILOT_ID = CHANNEL.seawardNodeId;
+const $ = s => document.querySelector(s);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const TZ = () => CHANNEL.meta.timezone;
+
+let LAST = null;
+let form = Store.get('form', null);
+
+function defaultForm() {
+  const now = new Date();
+  const tz = TZ();
+  const p = {};
+  for (const part of new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(now))
+    if (part.type !== 'literal') p[part.type] = part.value;
+  return {
+    date: `${p.year}-${p.month}-${p.day}`,
+    time: `${p.hour === '24' ? '00' : p.hour}:00`,
+    fromId: 'BT4', toId: PILOT_ID, condition: 'LOADED',
+    vessel: '', loa: '', beam: '', draft: '', speedOverride: ''
+  };
+}
+if (!form) form = defaultForm();
+
+/* ---------- plan view ---------- */
+function renderPlan() {
+  const selectable = selectablePoints();
+  const opts = ids => selectable.map(p =>
+    `<option value="${p.id}"${p.id === ids ? ' selected' : ''}>${esc(p.name)}</option>`).reverse().join('');
+
+  let dirTag = '';
+  try {
+    const r = buildLegs(form.fromId, form.toId);
+    dirTag = r.outbound ? 'Outbound' : 'Inbound';
+  } catch (e) { dirTag = '—'; }
+
+  $('#viewPlan').innerHTML = `
+    <p class="eyebrow">Plan the transit</p>
+    <div class="row2">
+      <div class="field"><label for="fDate">Date</label>
+        <input class="control" type="date" id="fDate" value="${esc(form.date)}"></div>
+      <div class="field"><label for="fTime">Sail time</label>
+        <input class="control" type="time" id="fTime" value="${esc(form.time)}"></div>
+    </div>
+    <div class="field"><label for="fFrom">From</label>
+      <select class="control" id="fFrom">${opts(form.fromId)}</select></div>
+    <div class="swap">
+      <button id="fSwap" type="button">Reverse</button>
+      <span class="dirtag" id="fDir">${dirTag}</span>
+    </div>
+    <div class="field"><label for="fTo">To</label>
+      <select class="control" id="fTo">${opts(form.toId)}</select></div>
+
+    <div class="field"><label>Condition</label>
+      <div class="seg" id="fCond">
+        <button type="button" data-v="LOADED"${form.condition !== 'LIGHT' ? ' class="on"' : ''}>Loaded</button>
+        <button type="button" data-v="LIGHT"${form.condition === 'LIGHT' ? ' class="on"' : ''}>Light ship</button>
+      </div></div>
+
+    <details class="opt"${form.vessel || form.speedOverride ? ' open' : ''}>
+      <summary>Vessel and speed</summary>
+      <div class="inner">
+        <div class="field"><label for="fVessel">Vessel name</label>
+          <input class="control" id="fVessel" value="${esc(form.vessel)}" placeholder="Optional"></div>
+        <div class="row2">
+          <div class="field"><label for="fLoa">LOA (m)</label>
+            <input class="control" id="fLoa" inputmode="decimal" value="${esc(form.loa)}"></div>
+          <div class="field"><label for="fDraft">Draft (m)</label>
+            <input class="control" id="fDraft" inputmode="decimal" value="${esc(form.draft)}"></div>
+        </div>
+        <div class="field"><label for="fSpeed">Speed override (kt through water)</label>
+          <input class="control" id="fSpeed" inputmode="decimal" value="${esc(form.speedOverride)}" placeholder="Leave blank to use segment speeds"></div>
+      </div>
+    </details>
+
+    <button class="generate" id="fGo">Generate brief</button>
+
+    <div class="foot">
+      Decision support only. Does not replace your judgment, the vessel's data,
+      official navigation publications, VTS, or required weather sources.
+      Channel geometry is unverified placeholder data.
+    </div>`;
+
+  const sync = () => {
+    form.date = $('#fDate').value; form.time = $('#fTime').value;
+    form.fromId = $('#fFrom').value; form.toId = $('#fTo').value;
+    form.vessel = $('#fVessel').value; form.loa = $('#fLoa').value;
+    form.draft = $('#fDraft').value; form.speedOverride = $('#fSpeed').value;
+    Store.set('form', form);
+    try { $('#fDir').textContent = buildLegs(form.fromId, form.toId).outbound ? 'Outbound' : 'Inbound'; }
+    catch (e) { $('#fDir').textContent = '—'; }
+  };
+  for (const id of ['fDate','fTime','fFrom','fTo','fVessel','fLoa','fDraft','fSpeed'])
+    $('#' + id).addEventListener('change', sync);
+  document.querySelectorAll('#fCond button').forEach(b => b.addEventListener('click', () => {
+    form.condition = b.dataset.v; Store.set('form', form);
+    document.querySelectorAll('#fCond button').forEach(x => x.classList.toggle('on', x === b));
+  }));
+  $('#fSwap').addEventListener('click', () => {
+    const a = $('#fFrom').value; $('#fFrom').value = $('#fTo').value; $('#fTo').value = a; sync();
+  });
+  $('#fGo').addEventListener('click', generate);
+}
+
+async function generate() {
+  const btn = $('#fGo');
+  const [y, mo, d] = form.date.split('-').map(Number);
+  const [h, mi] = form.time.split(':').map(Number);
+  if (!y || isNaN(h)) { btn.textContent = 'Enter a date and time'; return; }
+  if (form.fromId === form.toId) { btn.textContent = 'From and To must differ'; setTimeout(() => btn.textContent = 'Generate brief', 1800); return; }
+
+  btn.textContent = 'Working…'; btn.disabled = true;
+  try {
+    const sailEpoch = wallToEpoch(y, mo, d, h, mi, TZ());
+    const sp = parseFloat(form.speedOverride);
+    LAST = await buildBrief({
+      fromId: form.fromId, toId: form.toId, sailEpoch,
+      condition: form.condition === 'LIGHT' ? LIGHT : LOADED,
+      speedOverride: isFinite(sp) && sp > 0 ? sp : null,
+      vessel: form.vessel
+    });
+    Underway.reset();
+    Store.set('lastBrief', {
+      fromId: form.fromId, toId: form.toId, sailEpoch,
+      condition: form.condition, speedOverride: form.speedOverride,
+      vessel: form.vessel, generatedAt: Date.now()
+    });
+    renderBrief(LAST); show('viewBrief');
+  } catch (e) {
+    btn.textContent = 'Failed: ' + (e.message || e);
+    setTimeout(() => { btn.textContent = 'Generate brief'; btn.disabled = false; }, 3200);
+    return;
+  }
+  btn.textContent = 'Generate brief'; btn.disabled = false;
+}
+
+/* ---------- brief view ---------- */
+function windLine(w) {
+  if (!w || w.windKts == null) return '<span class="badge gap">No data</span>';
+  const g = w.gustKts != null && w.gustKts - w.windKts > 3 ? ` G${Math.round(w.gustKts)}` : '';
+  return `${compass(w.windFromDeg)} ${Math.round(w.windKts)}${g} kt`;
+}
+
+function renderBrief(b) {
+  const tz = b.tz, t = b.transit;
+  const from = t.waypoints[0].point, to = t.waypoints[t.waypoints.length - 1].point;
+  const last = b.stops[b.stops.length - 1];
+
+  // merge waypoints and events into one chronological ribbon
+  const items = [];
+  for (const s of b.stops) items.push({ t: s.eta, kind: 'STOP', s });
+  for (const e of b.tideEvents) items.push({ t: e.t, kind: 'TIDE', e });
+  for (const e of b.currentEvents) items.push({ t: e.t, kind: 'CUR', e });
+  if (t.pilotOffEpoch) items.push({ t: t.pilotOffEpoch, kind: 'OFF' });
+  items.sort((a, z) => a.t - z.t);
+
+  /* Every derived number on this page can be opened up. A pilot should be able
+     to see the arithmetic and the source behind any figure they are asked to
+     act on, rather than take it on faith. */
+  let workId = 0;
+  const workBlock = rows => {
+    const id = 'work' + (++workId);
+    return `<button class="showwork" data-work="${id}">Show working</button>
+      <div class="work" id="${id}"><table>${rows.filter(Boolean).join('')}</table></div>`;
+  };
+  const wrow = (k, v) => `<tr><td>${esc(k)}</td><td>${v}</td></tr>`;
+
+  const gaugeRows = (label, c) => {
+    if (!c) return wrow(label, 'no data — beyond the gauges');
+    const src = (c.gauges || []).join(' + ');
+    return [
+      wrow(label + ' source', esc(src) || '—'),
+      c.interpolated ? wrow('Blend', `${Math.round((1 - c.weight) * 100)}% / ${Math.round(c.weight * 100)}%`) : null,
+      c.lagMs ? wrow('Propagation lag', fmtDuration(c.lagMs)) : null,
+      c.extrapolated ? wrow('Note', `carried ${c.beyondNm != null ? c.beyondNm.toFixed(1) + ' nm ' : ''}past the end gauge`) : null,
+      c.partial ? wrow('Note', 'one gauge unavailable — using the other alone') : null
+    ].filter(Boolean).join('');
+  };
+
+  const ribbon = items.map((it, i) => {
+    const style = `animation-delay:${Math.min(i * 26, 520)}ms`;
+    if (it.kind === 'STOP') {
+      const s = it.s, p = s.point, c = s.cond;
+      const cls = p.type === 'PILOT_STATION' ? 'term' : p.type === 'TURN' ? 'turn' : (p.type === 'BERTH' ? 'major' : '');
+      const bits = [];
+      bits.push(`Wind ${windLine(c.weather)}`);
+      if (c.current && c.current.signedKts != null) {
+        const v = c.current.signedKts;
+        bits.push(Math.abs(v) < 0.15 ? 'Slack' : `${v > 0 ? 'Flood' : 'Ebb'} ${Math.abs(v).toFixed(1)} kt`);
+      } else bits.push('<span class="badge gap">No current</span>');
+      if (c.tide && c.tide.heightFt != null) bits.push(`Tide ${c.tide.heightFt >= 0 ? '+' : ''}${c.tide.heightFt.toFixed(1)} ft`);
+      if (c.weather && c.weather.visibilityNm != null && c.weather.visibilityNm < 5)
+        bits.push(`<span style="color:var(--caution)">Vis ${c.weather.visibilityNm.toFixed(1)} nm</span>`);
+      if (c.fog && c.fog.level !== 'LOW')
+        bits.push(`<span style="color:${c.fog.level === 'HIGH' ? 'var(--caution)' : 'var(--dim)'}">Fog ${c.fog.level.toLowerCase()}</span>`);
+      if (c.wave && c.wave.seaFt != null) bits.push(`Seas ${c.wave.seaFt.toFixed(1)} ft`);
+      const sog = s.legOut ? ` &nbsp;·&nbsp; ${s.legOut.sog.toFixed(1)} kt SOG <span style="color:var(--faint)">(${esc(s.legOut.zone || '')})</span>` : '';
+      const L = s.legIn;
+      const work = workBlock([
+        L ? wrow('Leg in', esc(L.from.name) + ' → ' + esc(L.to.name)) : wrow('Leg in', 'start of transit'),
+        L ? wrow('Distance', L.distanceNm.toFixed(2) + ' nm') : null,
+        L ? wrow('Reach', esc(L.zone || '—')) : null,
+        L ? wrow('Course', Math.round(L.course) + '°T') : null,
+        L ? wrow('Speed through water', L.stw.toFixed(1) + ' kt' + (t.condition === 'LIGHT' ? ' (light)' : ' (loaded)')) : null,
+        L && L.current && L.current.signedKts != null
+          ? wrow('Current component', ((t.outbound ? -1 : 1) * L.current.signedKts >= 0 ? '+' : '') +
+              ((t.outbound ? -1 : 1) * L.current.signedKts).toFixed(2) + ' kt')
+          : (L ? wrow('Current component', 'none — beyond the gauges') : null),
+        L ? wrow('Speed over ground', L.sog.toFixed(2) + ' kt') : null,
+        L ? wrow('Time for leg', fmtDuration((L.distanceNm / L.sog) * HOUR)) : null,
+        wrow('ETA', fmtClock(s.eta, tz)),
+        gaugeRows('Tide', c.tide),
+        gaugeRows('Current', c.current),
+        c.weather ? wrow('Weather', esc(c.weather.source || 'forecast')) : wrow('Weather', 'no data'),
+        c.weather && c.weather.visibilityNm != null
+          ? wrow('Visibility', c.weather.visibilityNm.toFixed(1) + ' nm' + (c.weather.visibilityFromModel ? ' (model — NWS grid empty)' : ' (NWS grid)'))
+          : wrow('Visibility', 'no data'),
+        c.fog ? wrow('Fog risk', c.fog.level.toLowerCase() + ' — ' + esc(c.fog.why)) : null,
+        c.fog ? wrow('Fog method', c.fog.source === 'model'
+          ? 'model visibility — the same HRRR field Windy draws its fog layer from'
+          : 'DERIVED from dewpoint depression and wind, not an NWS fog forecast') : null,
+        wrow('Solve', t.converged ? t.iterations + ' passes, converged' : 'did not converge')
+      ]);
+      return `<div class="stop ${cls}" style="${style}">
+        <div class="time num">${fmtClock(s.eta, tz)}</div>
+        <div class="name">${esc(p.name)}${s.legIn && s.legIn.oneWay ? ' <span class="badge gap">one-way</span>' : ''}</div>
+        <div class="meta">${bits.join('<span class="sep">|</span>')}${sog}</div>
+        ${work}
+      </div>`;
+    }
+    if (it.kind === 'TIDE') {
+      const e = it.e;
+      const work = workBlock([
+        wrow('Found by', 'sampling the interpolated tide at the ship every 6 min'),
+        wrow('Gauges', esc(e.stationName || '—')),
+        wrow('Height', (e.heightFt >= 0 ? '+' : '') + e.heightFt.toFixed(2) + ' ft MLLW'),
+        wrow('Time', fmtClock(e.t, tz)),
+        wrow('Ship then', esc(e.location.label)),
+        e.location.before ? wrow('Between ETAs',
+          fmtClock(e.location.before.eta, tz) + ' and ' +
+          (e.location.after ? fmtClock(e.location.after.eta, tz) : '—')) : null
+      ]);
+      return `<div class="stop evt tideevt" style="${style}">
+        <div class="time num">${fmtClock(e.t, tz)}</div>
+        <div class="name">${e.kind === 'HIGH' ? 'High water' : 'Low water'} ${e.heightFt >= 0 ? '+' : ''}${e.heightFt.toFixed(1)} ft</div>
+        <div class="meta">${esc(e.location.label)} <span class="sep">|</span> ${esc(e.stationName)}</div>
+        ${work}
+      </div>`;
+    }
+    if (it.kind === 'CUR') {
+      const e = it.e;
+      const title = e.kind === 'SLACK' ? `Slack — becoming ${e.becoming.toLowerCase()}` : `${e.kind} ${e.kts.toFixed(1)} kt`;
+      const work = workBlock([
+        wrow('Found by', 'sampling the interpolated current at the ship every 6 min'),
+        e.stationName ? wrow('Gauges', esc(e.stationName)) : null,
+        e.kts != null ? wrow('Velocity', e.kts.toFixed(2) + ' kt') : null,
+        e.becoming ? wrow('Becoming', esc(e.becoming.toLowerCase())) : null,
+        wrow('Time', fmtClock(e.t, tz)),
+        wrow('Ship then', esc(e.location.label)),
+        wrow('Sign convention', 'positive = flood, setting upriver')
+      ]);
+      return `<div class="stop evt" style="${style}">
+        <div class="time num">${fmtClock(e.t, tz)}</div>
+        <div class="name">${esc(title)}</div>
+        <div class="meta">${esc(e.location.label)}</div>
+        ${work}
+      </div>`;
+    }
+    return `<div class="stop term" style="${style}">
+      <div class="time num">${fmtClock(it.t, tz)}</div>
+      <div class="name" style="color:var(--stbd)">Pilot off</div>
+    </div>`;
+  }).join('');
+
+  // ladder card
+  let ladderHtml = '';
+  if (b.ladder) {
+    const L = b.ladder;
+    const cls = L.status === 'CLEAR' ? (L.side === 'STARBOARD' ? 'stbd' : 'port') : 'mixed';
+    const title = L.status === 'CLEAR' ? `${L.side} ladder`
+      : L.status === 'NO_DATA' ? 'No data — pilot review required'
+      : 'Mixed conditions — pilot review required';
+    const why = L.status === 'CLEAR'
+      ? `${L.dominantLabel} from ${Math.round(L.dominantFrom)}° (${compass(L.dominantFrom)}). Working the ship to ${Math.round(L.heading)}° puts it ${Math.abs(Math.round(L.relativeAngle))}° off the ${L.relativeAngle < 0 ? 'port' : 'starboard'} bow, so the lee falls to ${L.side.toLowerCase()}.`
+      : L.notes.join(' ');
+    const rows = (L.contributors || []).map(c =>
+      `<tr><td>${esc(c.label)}${c.weightNote ? ' · ' + esc(c.weightNote) : ''}</td><td>${Math.round(c.fromDeg)}° from — ${c.side ? c.side.toLowerCase() + ' lee' : c.reason.toLowerCase().replace('_', ' ')}</td></tr>`).join('');
+    ladderHtml = `<div class="ladder ${cls}">
+      <p class="eyebrow" style="margin-bottom:2px">Pilot ladder · ${fmtClock(L.eta || last.eta, tz)}</p>
+      <div class="side">${esc(title)}</div>
+      <div class="why">${esc(why)}</div>
+      <button class="showwork" data-work="ladderWork">Show working</button>
+      <div class="work" id="ladderWork"><table>
+        ${rows}
+        <tr><td>Assumed transfer heading</td><td>${L.heading != null ? Math.round(L.heading) + '°' : '—'}</td></tr>
+        <tr><td>Channel course at station</td><td>${L.baseCourse != null ? Math.round(L.baseCourse) + '°' : '—'}</td></tr>
+        <tr><td>Relative sea angle</td><td>${L.relativeAngle != null ? Math.round(L.relativeAngle) + '°' : '—'}</td></tr>
+        <tr><td>Direction spread</td><td>${L.spread != null ? Math.round(L.spread) + '°' : '—'}</td></tr>
+        <tr><td>Rule</td><td>sea ~60° off bow</td></tr>
+        <tr><td>Data</td><td>Simulated</td></tr>
+      </table></div>
+      <div class="disc">Advisory only — verify actual conditions and vessel heading before rigging the ladder.</div>
+    </div>`;
+  }
+
+  const alertsHtml = b.alerts.map(a =>
+    `<div class="alert${a.info ? ' info' : ''}"><div class="bar"></div><div>
+      <div class="t">${esc(a.t)}</div><div class="d">${a.d}</div></div></div>`).join('');
+
+  const wv = last.cond.wave, mc = b.maxCurrent;
+  const nextTide = b.tideEvents[0];
+
+  const badgeFor = s => s.quality === 'MOCK' ? 'mock'
+    : (s.quality === 'FAILED' || s.stale) ? 'stale' : 'gap';
+  const srcHtml = b.env.sources.map(s => {
+    let detail;
+    if (s.quality === 'FAILED') detail = esc(String(s.error).slice(0, 44));
+    else if (s.quality === 'CACHED') detail = `${s.count} pts · ${fmtDuration(s.ageMs)} old`;
+    else detail = `${s.count} pts · ${fmtClock(s.retrieved, tz)}`;
+    return `<div class="src">
+      <span class="n">${esc(s.name)}</span>
+      <span class="st">${detail}
+        <span class="badge ${badgeFor(s)}">${s.stale ? 'STALE' : esc(s.quality)}</span></span>
+    </div>`;
+  }).join('');
+
+  $('#viewBrief').innerHTML = `
+    <button class="backbtn" id="bBack">← New brief</button>
+
+    ${(() => {
+      const cached = b.env.sources.filter(s => s.quality === 'CACHED');
+      const stale = cached.filter(s => s.stale);
+      const failed = b.env.sources.filter(s => s.quality === 'FAILED');
+      if (!cached.length && !failed.length) return '';
+      const oldest = cached.length ? Math.max(...cached.map(s => s.ageMs)) : 0;
+      return `<div class="mockbar" style="border-color:rgba(230,169,60,.45);background:rgba(230,169,60,.09);color:#E8CB92">
+        <b style="color:var(--caution)">${stale.length ? 'Stale data' : failed.length && !cached.length ? 'Data unavailable' : 'Cached data'}</b><br>
+        ${cached.length ? `${cached.length} source${cached.length === 1 ? '' : 's'} could not be refreshed and are showing cached values, oldest ${fmtDuration(oldest)} old. ` : ''}
+        ${failed.length ? `${failed.length} source${failed.length === 1 ? ' has' : 's have'} no data at all and are shown as unavailable rather than estimated.` : ''}</div>`;
+    })()}
+    ${b.env.live ? '' : `<div class="mockbar"><b>Simulated conditions</b><br>
+      Wind, wave, tide and current figures below are generated, not observed.
+      Switch to live data in Setup. Channel geometry and speeds are real.</div>`}
+
+    <div class="headline">
+      <div class="route"><b>${esc(from.name)}</b> → <b>${esc(to.name)}</b>
+        · ${t.outbound ? 'Outbound' : 'Inbound'} · ${t.totalNm.toFixed(1)} nm · ${t.condition === 'LIGHT' ? 'Light ship' : 'Loaded'}${b.input.vessel ? ' · ' + esc(b.input.vessel) : ''}</div>
+      <div class="tri">
+        <div><div class="k">Sail</div><div class="v">${fmtClock(t.sailEpoch, tz)}</div>
+          <div class="s">${fmtDay(t.sailEpoch, tz)}</div></div>
+        <div><div class="k">${t.pilotOffEpoch ? 'Pilot off' : 'Arrive'}</div>
+          <div class="v hero">${fmtClock(t.endEpoch, tz)}</div>
+          <div class="s">estimated</div></div>
+        <div><div class="k">Transit</div><div class="v">${fmtDuration(t.endEpoch - t.sailEpoch)}</div>
+          <div class="s">${t.converged ? t.iterations + ' pass solve' : 'unconverged'}</div></div>
+      </div>
+    </div>
+
+    ${ladderHtml}
+    ${alertsHtml}
+
+    <div class="rule"></div>
+    <p class="eyebrow">What matters</p>
+    <div class="grid">
+      <div class="cell"><div class="k">Max wind</div>
+        <div class="v">${b.maxWind ? Math.round(b.maxWind.windKts) + (b.maxWind.gustKts ? ' G' + Math.round(b.maxWind.gustKts) : '') : '—'}</div>
+        <div class="s">${b.maxWind ? compass(b.maxWind.windFromDeg) + ' near ' + esc(b.maxWind.at) : 'No forecast'}</div></div>
+      <div class="cell"><div class="k">Max current</div>
+        <div class="v">${mc ? mc.kts.toFixed(1) + ' kt' : '—'}</div>
+        <div class="s">${mc ? mc.kind.toLowerCase() + ' at ' + fmtClock(mc.t, tz) + ' · ' + esc(mc.location.label) : 'Beyond the current gauges on this route'}</div>
+        ${mc ? workBlock([
+          wrow('Gauges', esc(mc.stationName || '—')),
+          wrow('Velocity', mc.kts.toFixed(2) + ' kt ' + mc.kind.toLowerCase().replace('max ', '')),
+          wrow('Time', fmtClock(mc.t, tz)),
+          wrow('Ship then', esc(mc.location.label)),
+          wrow('Found by', 'strongest value sampled at the ship across the transit'),
+          wrow('Sign convention', 'positive = flood, setting upriver'),
+          (b.env.checks || []).filter(c => c.biasKts != null).map(c =>
+            `observed ${c.biasKts >= 0 ? '+' : ''}${c.biasKts.toFixed(1)} kt vs predicted at ${esc(c.gauge)}`).join('; ') || null
+            ? wrow('Prediction check', (b.env.checks || []).filter(c => c.biasKts != null).map(c =>
+                `${c.biasKts >= 0 ? '+' : ''}${c.biasKts.toFixed(1)} kt at ${esc(c.gauge)}`).join(', '))
+            : null
+        ]) : ''}</div>
+      <div class="cell"><div class="k">${nextTide ? (nextTide.kind === 'HIGH' ? 'High water' : 'Low water') : 'Tide'}</div>
+        <div class="v">${nextTide ? fmtClock(nextTide.t, tz) : '—'}</div>
+        <div class="s">${nextTide ? (nextTide.heightFt >= 0 ? '+' : '') + nextTide.heightFt.toFixed(1) + ' ft · ' + esc(nextTide.location.label) : 'No turn during transit'}</div></div>
+      <div class="cell"><div class="k">At the station</div>
+        <div class="v">${wv && wv.seaFt != null ? wv.seaFt.toFixed(1) + ' ft' : '—'}</div>
+        <div class="s">${wv && wv.swellFt != null ? 'swell ' + wv.swellFt.toFixed(1) + ' ft ' + compass(wv.swellFromDeg) + ' / ' + Math.round(wv.swellPeriodS) + ' s' : 'No wave forecast'}</div></div>
+      <div class="cell wide">${workBlock([
+        wrow('Route', esc(from.name) + ' → ' + esc(to.name)),
+        wrow('Distance', t.totalNm.toFixed(2) + ' nm along the marked channel'),
+        wrow('Legs', t.legs.length + ' between charted aids'),
+        wrow('Condition', t.condition === 'LIGHT' ? 'Light ship' : 'Loaded'),
+        b.input.speedOverride ? wrow('Speed override', b.input.speedOverride + ' kt through water on every leg') : null,
+        wrow('Sail', fmtClock(t.sailEpoch, tz) + ' (all gone)'),
+        wrow('Underway', fmtClock(t.underwayEpoch, tz) + ' — ' + CHANNEL.letGoMinutes + ' min to make way'),
+        wrow('Arrive', fmtClock(t.arrivalEpoch, tz)),
+        t.pilotOffEpoch ? wrow('Pilot off', fmtClock(t.pilotOffEpoch, tz) + ' — ' + CHANNEL.disembarkMinutes + ' min from the buoy') : null,
+        wrow('Method', 'distance ÷ speed over ground per leg'),
+        wrow('Current in the loop', t.currentApplied ? 'yes, solved iteratively' : 'no'),
+        wrow('Convergence', t.converged ? t.iterations + ' passes, ETAs settled within 20 s' : 'did not converge in 8 passes'),
+        wrow('Geometry', 'NOAA ENC aids to navigation'),
+        wrow('Speeds', 'pilot-supplied by reach — estimates until logged')
+      ])}</div>
+    </div>
+
+    <div class="rule"></div>
+    <p class="eyebrow">Underway</p>
+    <div class="uw" id="underway"></div>
+
+    <div class="rule"></div>
+    <p class="eyebrow">Timeline</p>
+    <div class="ribbon">${ribbon}</div>
+
+    ${(b.env.checks && b.env.checks.length) ? `<div class="rule"></div>
+    <p class="eyebrow">Prediction check</p>
+    ${b.env.checks.map(c => `<div class="src">
+      <span class="n">${esc(c.gauge)}<br><span style="color:var(--faint);font-size:11px">observed ${fmtClock(c.at, tz)}</span></span>
+      <span class="st" style="font-size:13px;color:var(--ink);text-align:right">
+        ${Math.abs(c.observedKts) < 0.15 ? 'slack' : `${c.observedKts > 0 ? 'flood' : 'ebb'} ${Math.abs(c.observedKts).toFixed(1)} kt`}
+        ${c.biasKts != null
+          ? `<br><span style="font-size:11px;color:${Math.abs(c.biasKts) >= 0.4 ? 'var(--caution)' : 'var(--faint)'}">${c.biasKts >= 0 ? '+' : ''}${c.biasKts.toFixed(1)} kt vs predicted</span>`
+          : `<br><span style="font-size:11px;color:var(--faint)">no prediction here to compare</span>`}
+      </span></div>`).join('')}` : ''}
+
+    <div class="rule"></div>
+    <p class="eyebrow">Data sources</p>
+    ${srcHtml}
+    ${b.env.gaps.length ? `<p class="gapnote" style="margin-top:12px">${b.env.gaps.length} station assignments are unmapped on this route. Points without a current station are shown as “No current” rather than borrowing a neighbour's reading.</p>` : ''}
+
+    <div class="foot">
+      All times are estimates, shown in port local time. Speed over ground
+      includes the along-channel current component, solved iteratively.
+      Cross-channel set is not modelled.<br><br>
+      Decision support only. Verify against official sources before use.
+    </div>`;
+
+  $('#bBack').addEventListener('click', () => show('viewPlan'));
+  renderUnderway();
+  document.querySelectorAll('[data-work]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const el = document.getElementById(btn.dataset.work);
+      el.classList.toggle('on');
+      btn.textContent = el.classList.contains('on') ? 'Hide working' : 'Show working';
+    });
+  });
+}
+
+/* ---------- admin ---------- */
+function renderAdmin() {
+  const th = Store.get('thresholds', DEFAULT_THRESHOLDS);
+  const berthRows = selectablePoints().map(p => {
+    let outNm = '—', inNm = '—';
+    try { outNm = buildLegs(p.id, PILOT_ID).totalNm.toFixed(2); } catch (e) {}
+    try { inNm = buildLegs(PILOT_ID, p.id).totalNm.toFixed(2); } catch (e) {}
+    return `<tr><td>${esc(p.name)}</td><td class="n">${outNm}</td><td class="n">${inNm}</td></tr>`;
+  }).join('');
+
+  const logs = Store.get('transitLogs', []);
+  const agg = {};
+  for (const lg of logs)
+    for (const o of (lg.observed || [])) {
+      const k = o.zone + '|' + o.condition;
+      (agg[k] = agg[k] || []).push({ v: o.median, n: o.n });
+    }
+  const planFor = (zone, cond) => {
+    const e = CHANNEL.edges.find(x => x.zone === zone);
+    return e ? (cond === 'LIGHT' ? e.light : e.loaded) : null;
+  };
+  const logRows = Object.entries(agg).map(([k, arr]) => {
+    const [zone, cond] = k.split('|');
+    const vals = arr.map(a => a.v).sort((a, b) => a - b);
+    const med = vals[Math.floor(vals.length / 2)];
+    const plan = planFor(zone, cond);
+    const n = arr.reduce((s, a) => s + a.n, 0);
+    return `<tr><td>${esc(zone)}</td><td>${cond === 'LIGHT' ? 'Light' : 'Loaded'}</td>
+      <td class="n">${plan != null ? plan.toFixed(1) : '—'}</td>
+      <td class="n">${med.toFixed(1)}</td><td class="n">${n}</td></tr>`;
+  }).join('');
+
+  const seenZones = [];
+  for (const e of CHANNEL.edges)
+    if (e.zone && !seenZones.some(z => z.zone === e.zone)) seenZones.push(e);
+  const ov = speedOverrides();
+  const zoneRows = seenZones.map(e => {
+    const lk = e.zone + '|LOADED', gk = e.zone + '|LIGHT';
+    const edited = ov[lk] != null || ov[gk] != null;
+    return `<tr><td>${esc(e.zone)}${edited ? ' <span class="badge gap">edited</span>' : ''}</td>
+      <td><input class="spd" data-key="${esc(lk)}" inputmode="decimal" value="${e.loaded.toFixed(1)}"></td>
+      <td><input class="spd" data-key="${esc(gk)}" inputmode="decimal" value="${e.light.toFixed(1)}"></td></tr>`;
+  }).join('');
+
+  const oneWay = CHANNEL.edges.filter(e => e.dir !== 'BOTH').map(e =>
+    `<tr><td>${esc(pointById(e.a).name)} → ${esc(pointById(e.b).name)}</td>
+      <td class="n">${e.nm.toFixed(2)}</td></tr>`).join('');
+
+  $('#viewAdmin').innerHTML = `
+    <button class="backbtn" id="aBack">← Back</button>
+
+    <div class="adminsec">
+      <p class="eyebrow">Channel — ${esc(CHANNEL.meta.name)}</p>
+      <div class="mockbar"><b>Geometry from NOAA ENC</b><br>
+        ${CHANNEL.nodes.length} nodes, ${CHANNEL.edges.length} edges. Distances and courses are
+        computed from aid-to-navigation coordinates, not entered by hand. Segment speeds are
+        still estimates and need your numbers.</div>
+      <table class="data"><thead><tr><th>Berth</th><th style="text-align:right">Out nm</th><th style="text-align:right">In nm</th></tr></thead>
+        <tbody>${berthRows}</tbody></table>
+    </div>
+
+    <div class="adminsec">
+      <p class="eyebrow">Speeds by reach</p>
+      <table class="data"><thead><tr><th>Reach</th><th style="text-align:right">Loaded</th><th style="text-align:right">Light</th></tr></thead>
+        <tbody>${zoneRows}</tbody></table>
+      <p style="font-size:12px;color:var(--faint);margin:10px 0 0;line-height:1.5">
+        Edit any figure and it takes effect on the next brief. Edits survive app updates.</p>
+      <button class="btn danger" id="aResetSpeeds" style="margin-top:10px">Restore original speeds</button>
+      <span id="aSpdMsg" style="font-size:12px;color:var(--dim)"></span>
+    </div>
+
+    <div class="adminsec">
+      <p class="eyebrow">One-way legs</p>
+      <table class="data"><thead><tr><th>Leg</th><th style="text-align:right">nm</th></tr></thead>
+        <tbody>${oneWay}</tbody></table>
+    </div>
+
+    <div class="adminsec">
+      <p class="eyebrow">Data</p>
+      <div class="seg" id="aLive">
+        <button type="button" data-v="0"${!Store.get('liveData', false) ? ' class="on"' : ''}>Simulated</button>
+        <button type="button" data-v="1"${Store.get('liveData', false) ? ' class="on"' : ''}>Live</button>
+      </div>
+      <p style="font-size:12.5px;color:var(--dim);margin:12px 0 0;line-height:1.55">
+        Live pulls wind, gusts and visibility from the NWS gridded forecast at each
+        waypoint's own position, waves and swell from Open-Meteo's marine model, and
+        tide predictions from NOAA CO-OPS. Harmonic current predictions cover the lower
+        channel only — above that, currents show as unavailable rather than guessed.</p>
+      <p style="font-size:12.5px;color:var(--faint);margin:10px 0 0;line-height:1.55">
+        Satellite fog imagery isn't a forecast and can't be built into the brief:
+        <a href="https://www.ospo.noaa.gov/products/atmosphere/clouds/fls/" style="color:var(--info)">open the GOES fog product</a>.</p>
+    </div>
+
+    <div class="adminsec">
+      <p class="eyebrow">Offline</p>
+      <table class="data"><tbody>
+        <tr><td>Cached datasets</td><td class="n">${Object.keys(Store.get('envCache', {})).length}</td></tr>
+        <tr><td>Storage</td><td class="n">${Store.persistent ? 'persistent' : 'session only'}</td></tr>
+        <tr><td>Shell cached</td><td class="n">${('serviceWorker' in navigator) ? 'supported' : 'unsupported'}</td></tr>
+      </tbody></table>
+      <p style="font-size:12.5px;color:var(--dim);margin:12px 0 0;line-height:1.55">
+        Build the brief before you sail. If a source can't be refreshed later, the cached
+        copy is used and labelled with its age — the brief will say so rather than look fresh.</p>
+      <button class="btn danger" id="aClearCache" style="margin-top:10px">Clear cache</button>
+      <span id="aCacheMsg" style="font-size:12px;color:var(--dim)"></span>
+    </div>
+
+    <div class="adminsec">
+      <p class="eyebrow">Alert thresholds</p>
+      <div class="field"><label for="aTh">JSON</label>
+        <textarea class="control" id="aTh">${esc(JSON.stringify(th, null, 2))}</textarea></div>
+      <button class="btn" id="aSave">Save thresholds</button>
+      <button class="btn danger" id="aReset">Reset to defaults</button>
+      <div id="aMsg" style="font-size:12px;color:var(--dim);margin-top:4px"></div>
+    </div>
+
+    <div class="adminsec">
+      <p class="eyebrow">Timing assumptions</p>
+      <table class="data"><tbody>
+        <tr><td>Let go to underway</td><td class="n">${CHANNEL.letGoMinutes} min</td></tr>
+        <tr><td>Station to pilot off</td><td class="n">${CHANNEL.disembarkMinutes} min</td></tr>
+        <tr><td>Port timezone</td><td class="n">${esc(CHANNEL.meta.timezone)}</td></tr>
+        <tr><td>Geometry source</td><td class="n">NOAA ENC</td></tr>
+        <tr><td>Storage</td><td class="n">${Store.persistent ? 'persistent' : 'session only'}</td></tr>
+      </tbody></table>
+    </div>
+
+    <div class="adminsec">
+      <p class="eyebrow">Observed vs planned speed</p>
+      ${logRows ? `<table class="data"><thead><tr><th>Reach</th><th>Cond</th>
+        <th style="text-align:right">Plan</th><th style="text-align:right">Actual</th>
+        <th style="text-align:right">n</th></tr></thead><tbody>${logRows}</tbody></table>
+        <p style="font-size:12px;color:var(--faint);margin:10px 0 0;line-height:1.5">
+          Medians across saved transits. Once a reach has a few jobs behind it, the actual
+          figure is better evidence than the planned one.</p>`
+        : `<p style="font-size:12.5px;color:var(--dim);margin:0;line-height:1.55">
+          No transits logged yet. Start tracking on a brief and save the log at the end;
+          observed speeds per reach will build up here and can replace the estimates.</p>`}
+    </div>
+
+    <div class="adminsec">
+      <p class="eyebrow">Engine self-test</p>
+      <p style="font-size:12.5px;color:var(--dim);margin:0 0 12px">
+        Known inputs, known outputs. Run this after any edit to the channel data or engine.</p>
+      <button class="btn" id="aTest">Run tests</button>
+      <div class="testout" id="aTestOut" style="display:none"></div>
+    </div>`;
+
+  $('#aBack').addEventListener('click', () => show('viewPlan'));
+  document.querySelectorAll('#aLive button').forEach(b => b.addEventListener('click', () => {
+    Store.set('liveData', b.dataset.v === '1');
+    document.querySelectorAll('#aLive button').forEach(x => x.classList.toggle('on', x === b));
+  }));
+  $('#aSave').addEventListener('click', () => {
+    try { Store.set('thresholds', JSON.parse($('#aTh').value)); $('#aMsg').textContent = 'Saved.'; }
+    catch (e) { $('#aMsg').textContent = 'Not valid JSON — nothing saved.'; }
+  });
+  $('#aReset').addEventListener('click', () => {
+    Store.set('thresholds', DEFAULT_THRESHOLDS);
+    $('#aTh').value = JSON.stringify(DEFAULT_THRESHOLDS, null, 2);
+    $('#aMsg').textContent = 'Reset.';
+  });
+  document.querySelectorAll('input.spd').forEach(inp => inp.addEventListener('change', () => {
+    const v = parseFloat(inp.value);
+    const store = speedOverrides();
+    if (isFinite(v) && v > 0 && v < 30) { store[inp.dataset.key] = v; $('#aSpdMsg').textContent = ' Saved.'; }
+    else { delete store[inp.dataset.key]; $('#aSpdMsg').textContent = ' Ignored — must be between 0 and 30 kt.'; }
+    Store.set('speedOverrides', store);
+    applySpeedOverrides();
+  }));
+  $('#aResetSpeeds').addEventListener('click', () => {
+    Store.set('speedOverrides', {});
+    applySpeedOverrides();
+    renderAdmin();
+  });
+  $('#aClearCache').addEventListener('click', () => {
+    Store.set('envCache', {}); $('#aCacheMsg').textContent = ' Cleared.';
+  });
+  $('#aTest').addEventListener('click', () => {
+    const out = $('#aTestOut'); out.style.display = 'block';
+    out.innerHTML = runSelfTest().map(l =>
+      `<span class="${l.ok === true ? 'p' : l.ok === false ? 'f' : ''}">${esc(l.text)}</span>`).join('\n');
+  });
+}
+
+/* ---------- self test (mirrors the node suite) ---------- */
+function runSelfTest() {
+  const lines = []; let p = 0, f = 0;
+  const T = (name, fn) => {
+    try { fn(); lines.push({ ok: true, text: 'PASS  ' + name }); p++; }
+    catch (e) { lines.push({ ok: false, text: 'FAIL  ' + name + ' — ' + e.message }); f++; }
+  };
+  const eq = (a, b, m) => { if (a !== b) throw new Error(`${m || ''} expected ${b}, got ${a}`); };
+  const near = (a, b, tol) => { if (Math.abs(a - b) > tol) throw new Error(`expected ~${b}, got ${a}`); };
+  const tz = CHANNEL.meta.timezone;
+  const sail = wallToEpoch(2026, 1, 15, 18, 0, tz);
+
+  T('relAngle signs left negative', () => eq(relAngle(205, 145), -60));
+  T('relAngle across 0/360', () => eq(relAngle(350, 10), 20));
+  T('TOWARD to FROM reciprocal', () => eq(asFrom(dir(30, TOWARD)).deg, 210));
+  T('unlabelled direction rejected', () => {
+    let threw = false; try { dir(10, 'x'); } catch (e) { threw = true; }
+    if (!threw) throw new Error('accepted');
+  });
+  T('CST wall clock round-trips', () => eq(fmtClock(wallToEpoch(2026, 1, 15, 18, 0, tz), tz), '18:00'));
+  T('CDT wall clock round-trips', () => eq(fmtClock(wallToEpoch(2026, 7, 15, 18, 0, tz), tz), '18:00'));
+  T('spring forward survives', () => eq(fmtClock(wallToEpoch(2026, 3, 8, 4, 30, tz), tz), '04:30'));
+  T('outbound detected', () => eq(buildLegs('BT4', PILOT_ID).outbound, true));
+  T('inbound course is reciprocal', () => {
+    const o = buildLegs('BT4', PILOT_ID).legs[0];
+    const i = buildLegs(PILOT_ID, 'BT4');
+    near(relAngle(norm360(o.course + 180), i.legs[i.legs.length - 1].course), 0, 0.01);
+  });
+  T('legs sum to the route total', () => {
+    const r = buildLegs('BT4', PILOT_ID);
+    near(r.legs.reduce((s, l) => s + l.distanceNm, 0), r.totalNm, 0.01);
+  });
+  T('BT4 to pilot station follows the river', () =>
+    near(buildLegs('BT4', PILOT_ID).totalNm, 57.86, 0.05));
+  T('Clooney loop is longer outbound', () =>
+    near(buildLegs('P66_3', PILOT_ID).totalNm - buildLegs(PILOT_ID, 'P66_3').totalNm, 0.61, 0.05));
+  T('Clooney outbound rounds the island', () => {
+    const ids = buildLegs('P66_3', PILOT_ID).route.map(p => p.id);
+    if (!ids.includes('LOOP_23') || ids.includes('MK_121')) throw new Error('wrong water');
+  });
+  T('Clooney inbound leaves 121 to port', () => {
+    const ids = buildLegs(PILOT_ID, 'P66_3').route.map(p => p.id);
+    if (!ids.includes('MK_121') || ids.includes('LOOP_23')) throw new Error('wrong water');
+  });
+  T('all seven boarding points are selectable', () => {
+    const names = selectablePoints().filter(n => n.type === 'PILOT_STATION').map(n => n.name);
+    eq(names.length, 7);
+    for (const w of ['Buoy 1/2','Buoy 2B','Buoy 8','Buoy 14','Buoy 18','Buoy 22','Buoy 30'])
+      if (!names.includes(w)) throw new Error('missing ' + w);
+  });
+  T('pilot-off computed at every boarding point', () => {
+    for (const n of selectablePoints().filter(x => x.type === 'PILOT_STATION')) {
+      const t = solveTransit({ fromId: 'BT4', toId: n.id, sailEpoch: sail, applyCurrent: false });
+      if (t.pilotOffEpoch == null) throw new Error('no pilot-off at ' + n.name);
+    }
+  });
+  T('every berth routes both ways', () => {
+    for (const n of selectablePoints()) {
+      if (n.type === 'PILOT_STATION') continue;
+      if (!(buildLegs(n.id, PILOT_ID).totalNm > 0)) throw new Error('no route out of ' + n.id);
+      if (!(buildLegs(PILOT_ID, n.id).totalNm > 0)) throw new Error('no route in to ' + n.id);
+    }
+  });
+  T('let go offset applied', () => {
+    const t = solveTransit({ fromId: 'BT4', toId: PILOT_ID, sailEpoch: sail, applyCurrent: false });
+    eq(t.underwayEpoch - t.sailEpoch, CHANNEL.letGoMinutes * MIN);
+  });
+  T('speed override honoured', () => {
+    const t = solveTransit({ fromId: 'BT4', toId: PILOT_ID, sailEpoch: sail, applyCurrent: false, speedOverride: 10 });
+    near((t.arrivalEpoch - t.underwayEpoch) / HOUR, buildLegs('BT4', PILOT_ID).totalNm / 10, 0.01);
+  });
+  T('ebb helps outbound', () => {
+    const a = solveTransit({ fromId: 'BT4', toId: PILOT_ID, sailEpoch: sail, applyCurrent: false });
+    const b = solveTransit({ fromId: 'BT4', toId: PILOT_ID, sailEpoch: sail, currentAt: () => ({ signedKts: -1.5 }) });
+    if (b.arrivalEpoch >= a.arrivalEpoch) throw new Error('sign inverted');
+  });
+  T('ebb hinders inbound', () => {
+    const a = solveTransit({ fromId: PILOT_ID, toId: 'BT4', sailEpoch: sail, applyCurrent: false });
+    const b = solveTransit({ fromId: PILOT_ID, toId: 'BT4', sailEpoch: sail, currentAt: () => ({ signedKts: -1.5 }) });
+    if (b.arrivalEpoch <= a.arrivalEpoch) throw new Error('sign inverted');
+  });
+  T('iterative solve converges', () => {
+    const t = solveTransit({
+      fromId: 'BT4', toId: PILOT_ID, sailEpoch: sail,
+      currentAt: (s, tm) => ({ signedKts: 1.8 * Math.sin((tm - sail) / (6.21 * HOUR) * Math.PI) })
+    });
+    if (!t.converged) throw new Error('no convergence');
+  });
+  T('ETAs monotonic', () => {
+    const t = solveTransit({
+      fromId: 'BT4', toId: PILOT_ID, sailEpoch: sail,
+      currentAt: (s, tm) => ({ signedKts: 1.8 * Math.sin((tm - sail) / (6.21 * HOUR) * Math.PI) })
+    });
+    for (let i = 1; i < t.etas.length; i++) if (t.etas[i] <= t.etas[i - 1]) throw new Error('backwards at ' + i);
+  });
+  T('series returns null outside coverage', () => {
+    const s = [{ t: sail, h: 1 }, { t: sail + HOUR, h: 2 }];
+    if (sampleSeries(s, sail - HOUR) !== null) throw new Error('extrapolated');
+  });
+  T('light ship beats loaded', () => {
+    const a = solveTransit({ fromId: 'BT4', toId: PILOT_ID, sailEpoch: sail, applyCurrent: false, condition: LOADED });
+    const b = solveTransit({ fromId: 'BT4', toId: PILOT_ID, sailEpoch: sail, applyCurrent: false, condition: LIGHT });
+    if (b.arrivalEpoch >= a.arrivalEpoch) throw new Error('light not faster');
+  });
+  T('outer bar speeds match the table', () => {
+    const l = buildLegs('BT4', PILOT_ID).legs.find(x => x.zone === 'Outer bar');
+    eq(l.speedLoaded, 11.8); eq(l.speedLight, 13.0);
+  });
+  T('every leg has a zone and both speeds', () => {
+    for (const l of buildLegs('BT4', PILOT_ID).legs)
+      if (!l.zone || l.speedLoaded == null || l.speedLight == null) throw new Error('missing at ' + l.from.id);
+  });
+  T('lee: seas 145 heading 205 -> starboard', () => {
+    const r = recommendLadder({
+      seas: { dir: dir(145, FROM), heightFt: 4.2 },
+      swell: { dir: dir(135, FROM), heightFt: 2.5 },
+      wind: { dir: dir(150, FROM), speedKts: 20 }, baseCourse: 200
+    });
+    eq(r.heading, 205); eq(r.relativeAngle, -60); eq(r.side, 'STARBOARD');
+  });
+  T('lee: mirrored case -> port', () => {
+    const r = recommendLadder({
+      seas: { dir: dir(145, FROM), heightFt: 4.2 },
+      swell: { dir: dir(145, FROM), heightFt: 2.0 },
+      wind: { dir: dir(145, FROM), speedKts: 18 }, baseCourse: 85
+    });
+    eq(r.side, 'PORT');
+  });
+  T('lee: 350/010 wraparound', () => {
+    const r = recommendLadder({
+      seas: { dir: dir(355, FROM), heightFt: 4 },
+      swell: { dir: dir(350, FROM), heightFt: 2 },
+      wind: { dir: dir(0, FROM), speedKts: 15 }, baseCourse: 60
+    });
+    eq(r.heading, 55); eq(r.side, 'STARBOARD');
+  });
+  T('lee: opposed drivers force review', () => {
+    const r = recommendLadder({
+      seas: { dir: dir(150, FROM), heightFt: 3 },
+      swell: { dir: dir(340, FROM), heightFt: 2 },
+      wind: { dir: dir(150, FROM), speedKts: 18 }, baseCourse: 200
+    });
+    eq(r.status, 'MIXED');
+  });
+  T('lee: no data is not a guess', () => eq(recommendLadder({ baseCourse: 200 }).status, 'NO_DATA'));
+  T('lee: every relative angle defined', () => {
+    for (let a = -180; a <= 180; a++) {
+      const s = leeFromRelative(a).side;
+      if (s !== 'PORT' && s !== 'STARBOARD' && s !== null) throw new Error('undefined at ' + a);
+    }
+  });
+
+  lines.push({ text: '' });
+  lines.push({ ok: f === 0, text: `${p} passed, ${f} failed` });
+  return lines;
+}
+
+/* =========================================================================
+   UNDERWAY
+   Live position matched to the planned transit. Foreground only: iOS suspends
+   JavaScript when the app is backgrounded or the screen locks, so this cannot
+   run as a background logger and does not pretend to.
+   ======================================================================= */
+
+const Underway = {
+  watchId: null, fixes: [], last: null, snap: null, revision: null,
+  error: null, legSamples: {},
+
+  get active() { return this.watchId != null; },
+
+  start(onUpdate) {
+    if (!navigator.geolocation) { this.error = 'This device has no location service.'; onUpdate(); return; }
+    this.error = null;
+    this.watchId = navigator.geolocation.watchPosition(
+      pos => { this.onFix(pos); onUpdate(); },
+      err => {
+        this.error = err.code === 1 ? 'Location permission denied.'
+                   : err.code === 3 ? 'No fix yet — waiting for GPS.'
+                   : 'Location unavailable: ' + err.message;
+        onUpdate();
+      },
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 });
+  },
+
+  stop() {
+    if (this.watchId != null) navigator.geolocation.clearWatch(this.watchId);
+    this.watchId = null;
+  },
+
+  reset() { this.stop(); this.fixes = []; this.last = null; this.snap = null;
+            this.revision = null; this.error = null; this.legSamples = {}; },
+
+  onFix(pos) {
+    const fix = {
+      lat: pos.coords.latitude, lon: pos.coords.longitude,
+      t: pos.timestamp || Date.now(),
+      accuracyM: pos.coords.accuracy,
+      deviceSog: pos.coords.speed != null ? pos.coords.speed * 1.94384 : null
+    };
+    // Discard fixes too poor to be useful rather than letting them jitter the plan.
+    if (fix.accuracyM != null && fix.accuracyM > 100) { this.error = 'Weak GPS fix (' + Math.round(fix.accuracyM) + ' m).'; return; }
+    this.error = null;
+    this.fixes.push(fix);
+    if (this.fixes.length > 2000) this.fixes.shift();
+
+    const prev = this.last;
+    this.last = fix;
+    if (!LAST) return;
+
+    const snap = snapToRoute(LAST.transit, fix.lat, fix.lon, 1.0);
+    this.snap = snap;
+    if (!snap || snap.offRoute) { this.revision = null; return; }
+
+    // Speed made good, preferring the device value when it is available.
+    let sog = fix.deviceSog;
+    if (sog == null) sog = speedBetween(prev, fix);
+    fix.sog = sog;
+
+    // Record observed speed against the reach being run, for later comparison
+    // with the planned table.
+    if (sog != null && sog > 0.5 && snap.leg && snap.leg.zone) {
+      const key = snap.leg.zone + '|' + (LAST.transit.condition || 'LOADED');
+      (this.legSamples[key] = this.legSamples[key] || []).push(sog);
+    }
+
+    this.revision = reviseTransit(LAST.transit, snap, fix.t, {
+      observedSog: sog, speedOverride: LAST.input.speedOverride,
+      currentAt: LAST.currentAt
+    });
+  },
+
+  /** Median observed speed per reach — median, because a couple of fixes taken
+      while swinging or stopped would drag a mean badly. */
+  observedByZone() {
+    const out = [];
+    for (const [key, arr] of Object.entries(this.legSamples)) {
+      if (arr.length < 5) continue;
+      const sorted = arr.slice().sort((a, b) => a - b);
+      out.push({ zone: key.split('|')[0], condition: key.split('|')[1],
+                 median: sorted[Math.floor(sorted.length / 2)], n: arr.length });
+    }
+    return out.sort((a, b) => a.zone.localeCompare(b.zone));
+  },
+
+  saveLog() {
+    if (!LAST || !this.fixes.length) return null;
+    const log = {
+      when: LAST.transit.sailEpoch,
+      from: LAST.transit.waypoints[0].point.name,
+      to: LAST.transit.waypoints[LAST.transit.waypoints.length - 1].point.name,
+      condition: LAST.transit.condition,
+      plannedEnd: LAST.transit.endEpoch,
+      actualEnd: this.last ? this.last.t : null,
+      observed: this.observedByZone()
+    };
+    const logs = Store.get('transitLogs', []);
+    logs.push(log);
+    Store.set('transitLogs', logs.slice(-40));
+    return log;
+  }
+};
+
+function renderUnderway() {
+  const el = $('#underway');
+  if (!el) return;
+  const U = Underway, tz = LAST ? LAST.tz : TZ();
+
+  if (!U.active) {
+    el.innerHTML = `<button class="btn" id="uStart">Start tracking</button>
+      <p style="font-size:12px;color:var(--faint);margin:2px 0 0;line-height:1.5">
+        Matches your position to this plan and revises the pilot-off time. Needs the
+        app open and on screen — iOS stops it when backgrounded.</p>`;
+    $('#uStart').addEventListener('click', () => { U.start(renderUnderway); renderUnderway(); });
+    return;
+  }
+
+  const r = U.revision, sn = U.snap, f = U.last;
+  let body;
+  if (U.error) {
+    body = `<div class="uline"><span class="k">Status</span><span class="v" style="color:var(--caution)">${esc(U.error)}</span></div>`;
+  } else if (!f) {
+    body = `<div class="uline"><span class="k">Status</span><span class="v">Waiting for a fix…</span></div>`;
+  } else if (!sn || sn.offRoute) {
+    body = `<div class="uline"><span class="k">Position</span><span class="v" style="color:var(--caution)">Off the planned route${sn ? ' by ' + sn.offNm.toFixed(1) + ' nm' : ''}</span></div>
+      <div class="uline"><span class="k">Fix</span><span class="v num">${f.lat.toFixed(4)}, ${f.lon.toFixed(4)}</span></div>`;
+  } else {
+    const late = r ? r.deltaMs : 0;
+    const lateTxt = Math.abs(late) < 90000 ? 'on plan'
+      : (late > 0 ? fmtDuration(late) + ' late' : fmtDuration(-late) + ' early');
+    body = `
+      <div class="uline"><span class="k">Position</span><span class="v">${esc(sn.leg.from.name)} → ${esc(sn.leg.to.name)}</span></div>
+      <div class="uline"><span class="k">Run / to run</span><span class="v num">${sn.alongNm.toFixed(1)} / ${sn.remainingNm.toFixed(1)} nm</span></div>
+      <div class="uline"><span class="k">Speed</span><span class="v num">${f.sog != null ? f.sog.toFixed(1) + ' kt' : '—'}${sn.leg.zone ? ` <span style="color:var(--faint);font-size:12px">plan ${sn.leg.defaultSpeed}</span>` : ''}</span></div>
+      <div class="uline"><span class="k">Off track</span><span class="v num">${(sn.offNm * 1852).toFixed(0)} m</span></div>
+      ${r ? `<div class="uline"><span class="k">Pilot off</span><span class="v num" style="color:${Math.abs(late) < 90000 ? 'var(--stbd)' : 'var(--caution)'}">${fmtClock(r.endEpoch, tz)} <span style="font-size:12px">${esc(lateTxt)}</span></span></div>` : ''}
+      <div class="uline"><span class="k">Next</span><span class="v">${r && r.etas[0] ? esc(r.etas[0].point.name) + ' ' + fmtClock(r.etas[0].eta, tz) : '—'}</span></div>`;
+  }
+
+  el.innerHTML = `${body}
+    <div style="margin-top:12px">
+      <button class="btn" id="uStop">Stop</button>
+      <button class="btn" id="uSave">Save log</button>
+    </div>
+    <div id="uMsg" style="font-size:12px;color:var(--dim);margin-top:2px"></div>`;
+  $('#uStop').addEventListener('click', () => { U.stop(); renderUnderway(); });
+  $('#uSave').addEventListener('click', () => {
+    const log = U.saveLog();
+    $('#uMsg').textContent = log
+      ? `Saved. ${log.observed.length} reach${log.observed.length === 1 ? '' : 'es'} with enough fixes to compare.`
+      : 'Nothing to save yet.';
+  });
+}
+
+/* ---------- navigation ---------- */
+function show(id) {
+  document.querySelectorAll('.view').forEach(v => v.classList.toggle('on', v.id === id));
+  window.scrollTo(0, 0);
+  $('#navBtn').textContent = id === 'viewAdmin' ? 'Close' : 'Setup';
+}
+$('#navBtn').addEventListener('click', () => {
+  if ($('#viewAdmin').classList.contains('on')) show('viewPlan');
+  else { renderAdmin(); show('viewAdmin'); }
+});
+
+applySpeedOverrides();
+$('#portname').textContent = CHANNEL.meta.name;
+renderPlan();
+
+/* A brief generated at the berth should still be there after the app is
+   reopened at the sea buoy with no signal. Regenerating uses the cache, so
+   this works offline; the banner reports whatever age the data has. */
+(async function restoreLastBrief() {
+  const saved = Store.get('lastBrief', null);
+  if (!saved) return;
+  const age = Date.now() - (saved.generatedAt || 0);
+  if (age > 18 * HOUR) return;
+  const bar = document.createElement('div');
+  bar.className = 'mockbar';
+  bar.style.cssText = 'border-color:var(--line);background:var(--deck);color:var(--dim)';
+  const fromName = (() => { try { return pointById(saved.fromId).name; } catch (e) { return saved.fromId; } })();
+  const toName = (() => { try { return pointById(saved.toId).name; } catch (e) { return saved.toId; } })();
+  bar.innerHTML = `<b style="color:var(--ink)">Last brief</b><br>
+    ${esc(fromName)} → ${esc(toName)}, sailed ${fmtClock(saved.sailEpoch, TZ())},
+    built ${fmtDuration(age)} ago.
+    <button class="btn" id="reopen" style="margin-top:10px">Reopen</button>`;
+  const host = $('#viewPlan');
+  host.insertBefore(bar, host.firstChild);
+  $('#reopen').addEventListener('click', async () => {
+    $('#reopen').textContent = 'Working…';
+    try {
+      LAST = await buildBrief({
+        fromId: saved.fromId, toId: saved.toId, sailEpoch: saved.sailEpoch,
+        condition: saved.condition === 'LIGHT' ? LIGHT : LOADED,
+        speedOverride: parseFloat(saved.speedOverride) > 0 ? parseFloat(saved.speedOverride) : null,
+        vessel: saved.vessel
+      });
+      Underway.reset();
+      renderBrief(LAST); show('viewBrief');
+    } catch (e) { $('#reopen').textContent = 'Failed: ' + (e.message || e); }
+  });
+})();
+
+/* Offline shell. Registered only when served over http(s) — opening the file
+   directly still works, just without the cached shell. */
+if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+</script>
+</body>
+</html>
