@@ -75,6 +75,27 @@ button,select,input{font-family:inherit;font-size:inherit;color:inherit;font-var
 .calcres{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:14px}
 .calcres .cell{padding:11px 12px}
 .stationmeta{font-size:11.5px;color:var(--faint);line-height:1.6;margin-top:8px}
+.corridor{width:100%;height:auto;display:block;margin:8px 0}
+.scrub{display:flex;gap:5px;margin:12px 0 4px}
+.scrub button{flex:1;background:var(--hull);border:1px solid var(--line);border-radius:8px;
+  color:var(--dim);padding:9px 2px;font-size:11px;font-weight:700;letter-spacing:.06em;cursor:pointer}
+.scrub button.on{background:var(--deck);border-color:var(--stbd);color:var(--ink)}
+.fogrow{display:flex;justify-content:space-between;gap:10px;align-items:baseline;
+  padding:10px 0;border-bottom:1px solid var(--line-soft)}
+.fogrow:last-child{border-bottom:none}
+.fogrow .pl{flex:1}
+.fogrow .pl b{font-size:13.5px;font-weight:650}
+.fogrow .pl span{display:block;font-size:11px;color:var(--faint);margin-top:1px}
+.fogrow .vv{font-family:var(--mono);font-size:16px;font-weight:600;text-align:right}
+.fogrow .tr{font-size:11px;color:var(--faint);display:block;font-weight:400;font-family:var(--sans)}
+.fogcard{cursor:pointer;position:relative}
+.fogcard:active{background:var(--deck)}
+.fogcard-grid{display:grid;grid-template-columns:1fr 1fr;gap:2px 10px;margin-top:9px;
+  font-size:12px;color:var(--dim);font-variant-numeric:tabular-nums}
+.fogcard-cta{margin-top:9px;padding-top:8px;border-top:1px solid var(--line-soft);
+  font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--faint)}
+.lvl-port{color:var(--port)} .lvl-caution{color:var(--caution)}
+.lvl-stbd{color:var(--stbd)} .lvl-gap{color:var(--faint)}
 .view{display:none}
 .view.on{display:block}
 
@@ -312,13 +333,15 @@ textarea.control{min-height:190px;font-family:var(--mono);font-size:12px;line-he
 
 <nav class="tabs" id="tabs">
   <button data-tab="viewPlan" class="on">Transit</button>
-  <button data-tab="viewTides">Tides &amp; Currents</button>
+  <button data-tab="viewTides">Tides</button>
+  <button data-tab="viewFog">Fog</button>
 </nav>
 
 <main class="wrap">
   <section class="view on" id="viewPlan"></section>
   <section class="view" id="viewBrief"></section>
   <section class="view" id="viewTides"></section>
+  <section class="view" id="viewFog"></section>
   <section class="view" id="viewAdmin"></section>
 </main>
 
@@ -3721,17 +3744,23 @@ const OpenMeteoVisibility = {
     u.searchParams.set('wind_speed_unit', 'kn');
     u.searchParams.set('timezone', 'UTC');
     u.searchParams.set('forecast_days', '2');
-    if (model) u.searchParams.set('models', model);
+    /* Both models in one request: Open-Meteo suffixes each field with the model
+       id when several are given, so GFS costs no extra round trip. HRRR stays
+       primary; GFS is carried for comparison and never averaged with it. */
+    if (model) u.searchParams.set('models', model + ',gfs_seamless');
     const d = await getJSON(u.toString());
     const h = d.hourly;
     if (!h || !h.time) throw new Error('no hourly block');
+    const pick = base => h[base + (model ? '_' + model : '')] || h[base] || [];
+    const vis = pick('visibility'), temp = pick('temperature_2m'),
+          dew = pick('dew_point_2m'), wind = pick('wind_speed_10m'), lcc = pick('cloud_cover_low');
+    const visGfs = h['visibility_gfs_seamless'] || null;
     const series = h.time.map((iso, i) => ({
       t: Date.parse(iso + 'Z'),
-      visibilityNm: h.visibility[i] != null ? h.visibility[i] / 1852 : null,
-      lowCloudPct: h.cloud_cover_low ? h.cloud_cover_low[i] : null,
-      modelTempF: h.temperature_2m[i],
-      modelDewF: h.dew_point_2m[i],
-      modelWindKts: h.wind_speed_10m[i]
+      visibilityNm: vis[i] != null ? vis[i] / 1852 : null,
+      visibilityGfsNm: visGfs && visGfs[i] != null ? visGfs[i] / 1852 : null,
+      lowCloudPct: lcc[i] != null ? lcc[i] : null,
+      modelTempF: temp[i], modelDewF: dew[i], modelWindKts: wind[i]
     })).filter(r => isFinite(r.t));
     const withVis = series.filter(r => r.visibilityNm != null).length;
     return { series, withVis };
@@ -3759,6 +3788,378 @@ const OpenMeteoVisibility = {
     };
   }
 };
+
+/* ---------------------------------------------------------------------------
+   FOG: MULTI-MODEL VISIBILITY
+   Windy's Point Forecast API publishes no visibility parameter, so it cannot
+   serve this. Open-Meteo exposes the raw model fields instead. Over the Gulf
+   coast that is HRRR at 3 km and GFS; ECMWF does not publish visibility for
+   this region, so agreement here is across two models, not three.
+
+   Supporting fields (dewpoint spread, low cloud) are carried for context and
+   are never presented as measured visibility.
+   ------------------------------------------------------------------------- */
+
+const VIS_MODELS = [
+  { id: 'gfs_hrrr', name: 'HRRR', resolution: '3 km', hours: 48 },
+  { id: 'gfs_seamless', name: 'GFS', resolution: '13 km', hours: 120 }
+];
+
+async function fetchVisModel(lat, lon, modelId) {
+  const u = new URL('https://api.open-meteo.com/v1/forecast');
+  u.searchParams.set('latitude', lat.toFixed(4));
+  u.searchParams.set('longitude', lon.toFixed(4));
+  u.searchParams.set('hourly',
+    'visibility,temperature_2m,dew_point_2m,wind_speed_10m,cloud_cover_low');
+  u.searchParams.set('temperature_unit', 'fahrenheit');
+  u.searchParams.set('wind_speed_unit', 'kn');
+  u.searchParams.set('timezone', 'UTC');
+  u.searchParams.set('forecast_days', '3');
+  if (modelId) u.searchParams.set('models', modelId);
+  const d = await getJSON(u.toString());
+  const h = d.hourly;
+  if (!h || !h.time) throw new Error('no hourly block');
+  const series = h.time.map((iso, i) => ({
+    t: Date.parse(iso + 'Z'),
+    visibilityNm: h.visibility[i] != null ? h.visibility[i] / 1852 : null,
+    lowCloudPct: h.cloud_cover_low ? h.cloud_cover_low[i] : null,
+    tempF: h.temperature_2m[i],
+    dewF: h.dew_point_2m[i],
+    windKts: h.wind_speed_10m[i]
+  })).filter(r => isFinite(r.t));
+  const withVis = series.filter(r => r.visibilityNm != null).length;
+  if (!withVis) throw new Error('model publishes no visibility here');
+  return series;
+}
+
+/* ---- METAR observations ----
+   Airport observations are the only true measured visibility anywhere near
+   this channel. There is no airport at Cameron, so the lower channel has no
+   observation and the app says so rather than reaching for a distant one. */
+/* Discovered by bounding box rather than hardcoded, so a station appearing near
+   Cameron in future is picked up without a code change. Checked: CAPL1 at
+   Calcasieu Pass carries air temperature, wind, barometer and water temperature
+   but no visibility sensor, and nothing else in the lower channel measures
+   visibility. Nearest measured visibility is the Lake Charles airports. */
+const METAR_BBOX = { latS: 29.2, lonW: -93.9, latN: 30.4, lonE: -92.8 };
+
+async function fetchMetarNear(bbox) {
+  const u = new URL('https://aviationweather.gov/api/data/metar');
+  u.searchParams.set('bbox', `${bbox.latS},${bbox.lonW},${bbox.latN},${bbox.lonE}`);
+  u.searchParams.set('format', 'json');
+  u.searchParams.set('hours', '2');
+  const d = await getJSON(u.toString());
+  if (!Array.isArray(d)) throw new Error('unexpected METAR response');
+  const byStation = new Map();
+  for (const r of d) {
+    const t = r.obsTime ? r.obsTime * 1000 : Date.parse(r.reportTime + 'Z');
+    if (!isFinite(t)) continue;
+    let vis = null;
+    if (typeof r.visib === 'number') vis = r.visib;
+    else if (typeof r.visib === 'string') vis = parseFloat(r.visib.replace('+', ''));
+    if (vis != null && !isFinite(vis)) vis = null;
+    const row = { station: r.icaoId, name: r.name || r.icaoId, lat: r.lat, lon: r.lon,
+                  t, visibilityNm: vis, raw: r.rawOb || '' };
+    const prev = byStation.get(row.station);
+    if (!prev || row.t > prev.t) byStation.set(row.station, row);
+  }
+  return [...byStation.values()].filter(r => r.visibilityNm != null && r.lat != null);
+}
+
+async function fetchMetarLegacy(ids) {
+  const u = new URL('https://aviationweather.gov/api/data/metar');
+  u.searchParams.set('ids', ids.join(','));
+  u.searchParams.set('format', 'json');
+  u.searchParams.set('hours', '3');
+  const d = await getJSON(u.toString());
+  if (!Array.isArray(d)) throw new Error('unexpected METAR response');
+  return d.map(r => ({
+    station: r.icaoId,
+    t: r.obsTime ? r.obsTime * 1000 : Date.parse(r.reportTime + 'Z'),
+    visibilityNm: typeof r.visib === 'number' ? r.visib
+      : (typeof r.visib === 'string' ? parseFloat(r.visib.replace('+', '')) : null),
+    tempF: r.temp != null ? r.temp * 9 / 5 + 32 : null,
+    dewF: r.dewp != null ? r.dewp * 9 / 5 + 32 : null,
+    windKts: r.wspd != null ? r.wspd : null,
+    raw: r.rawOb || ''
+  })).filter(r => isFinite(r.t)).sort((a, b) => a.t - b.t);
+}
+
+/* ---- classification ---- */
+function visLevel(nm) {
+  if (nm == null) return { key: 'NONE', label: 'Data unavailable', cls: 'gap' };
+  if (nm < 1) return { key: 'DENSE', label: 'Dense fog', cls: 'port' };
+  if (nm < 2) return { key: 'POOR', label: 'Poor', cls: 'caution' };
+  if (nm < 5) return { key: 'CAUTION', label: 'Caution', cls: 'caution' };
+  return { key: 'GOOD', label: 'Good', cls: 'stbd' };
+}
+
+/* Trend from the gradient either side of an instant, not from the nearest
+   extreme, so a moment just past a minimum reads as improving. */
+function visTrend(series, t, windowMs) {
+  const w = windowMs || 90 * MIN;
+  const at = tt => {
+    const s = sampleSeries(series, tt);
+    return s ? lerpNum(s.a.visibilityNm, s.b ? s.b.visibilityNm : null, s.f) : null;
+  };
+  const before = at(t - w), after = at(t + w);
+  if (before == null || after == null) return 'unknown';
+  const d = after - before;
+  if (Math.abs(d) < 0.4) return 'steady';
+  return d < 0 ? 'worsening' : 'improving';
+}
+
+/* ---------------------------------------------------------------------------
+   FOG PROGRESSION
+   Sample points along the route, forecast visibility at each, for each forecast
+   hour. That gives a grid of visibility over position and time. Progression is
+   read out of how the reduced-visibility region moves along that grid — it
+   describes the evolution of the forecast field, not observed fog-bank motion.
+   ------------------------------------------------------------------------- */
+
+const FOG_THRESHOLD_NM = 2.0;   // what counts as "reduced" for progression
+
+/** Sample points: every named waypoint, thinned so no two are within 3 nm. */
+function fogSamplePoints(transit) {
+  const out = [];
+  for (const w of transit.waypoints) {
+    const p = w.point;
+    const named = p.type === 'BERTH' || p.type === 'PILOT_STATION' ||
+                  p.type === 'ANCHORAGE' || p.type === 'TURN';
+    const last = out[out.length - 1];
+    if (!last || named || Math.abs(p.chainNm - last.chainNm) >= 3) {
+      if (last && Math.abs(p.chainNm - last.chainNm) < 0.5 && !named) continue;
+      out.push({ id: p.id, name: p.name, lat: p.lat, lon: p.lon,
+                 chainNm: p.chainNm, eta: w.eta, named });
+    }
+  }
+  return out;
+}
+
+/**
+ * Build the grid.
+ * @returns { points, times, models, vis[modelName][pointIndex] -> series,
+ *            best(pointIndex, t) -> {nm, model} }
+ */
+async function buildFogGrid(points, win, opts) {
+  const models = [];
+  const perModel = {};
+  for (const m of VIS_MODELS) {
+    const rows = [];
+    let ok = 0;
+    for (const p of points) {
+      try {
+        rows.push(await fetchVisModel(p.lat, p.lon, m.id));
+        ok++;
+      } catch (e) { rows.push(null); }
+    }
+    if (ok) { models.push(m); perModel[m.name] = rows; }
+  }
+  if (!models.length) throw new Error('no model published visibility for this route');
+
+  const primary = models[0].name;
+  const valueAt = (modelName, i, t) => {
+    const series = perModel[modelName] && perModel[modelName][i];
+    if (!series) return null;
+    const s = sampleSeries(series, t);
+    return s ? lerpNum(s.a.visibilityNm, s.b ? s.b.visibilityNm : null, s.f) : null;
+  };
+  const supportAt = (i, t) => {
+    const series = perModel[primary] && perModel[primary][i];
+    if (!series) return null;
+    const s = sampleSeries(series, t);
+    if (!s) return null;
+    return {
+      tempF: lerpNum(s.a.tempF, s.b ? s.b.tempF : null, s.f),
+      dewF: lerpNum(s.a.dewF, s.b ? s.b.dewF : null, s.f),
+      windKts: lerpNum(s.a.windKts, s.b ? s.b.windKts : null, s.f),
+      lowCloudPct: lerpNum(s.a.lowCloudPct, s.b ? s.b.lowCloudPct : null, s.f)
+    };
+  };
+
+  const times = [];
+  const step = HOUR;
+  for (let t = Math.floor(win.start / step) * step; t <= win.end + step; t += step) times.push(t);
+
+  return { points, times, models, primary, perModel, valueAt, supportAt,
+           seriesFor: (modelName, i) => perModel[modelName] && perModel[modelName][i] };
+}
+
+/** Where the reduced-visibility region sits at one instant, along the channel. */
+function reducedExtent(grid, t, threshold) {
+  const th = threshold == null ? FOG_THRESHOLD_NM : threshold;
+  const hits = [];
+  for (let i = 0; i < grid.points.length; i++) {
+    const v = grid.valueAt(grid.primary, i, t);
+    if (v != null && v < th) hits.push({ i, chainNm: grid.points[i].chainNm, nm: v });
+  }
+  if (!hits.length) return null;
+  const chains = hits.map(h => h.chainNm);
+  const worst = hits.reduce((a, b) => (b.nm < a.nm ? b : a));
+  return {
+    lo: Math.min(...chains), hi: Math.max(...chains),
+    centroid: chains.reduce((a, b) => a + b, 0) / chains.length,
+    count: hits.length, worst
+  };
+}
+
+/**
+ * Describe how the reduced-visibility region evolves across the window.
+ * Upriver = increasing chainage = northward on this channel.
+ */
+function fogProgression(grid, win, tz) {
+  const frames = [];
+  for (const t of grid.times) {
+    if (t < win.start - HOUR || t > win.end + HOUR) continue;
+    frames.push({ t, ext: reducedExtent(grid, t) });
+  }
+  const active = frames.filter(f => f.ext);
+  if (!active.length) return { any: false, frames, statement: 'No reduced visibility forecast along the route during this window.' };
+
+  const first = active[0], last = active[active.length - 1];
+  const drift = last.ext.centroid - first.ext.centroid;
+  const grew = last.ext.count - first.ext.count;
+
+  const nameAt = chain => {
+    let best = grid.points[0];
+    for (const p of grid.points) if (Math.abs(p.chainNm - chain) < Math.abs(best.chainNm - chain)) best = p;
+    return best.name;
+  };
+
+  let motion;
+  if (Math.abs(drift) < 2) motion = grew > 0 ? 'expanding in place' : grew < 0 ? 'contracting in place' : 'holding position';
+  else motion = drift > 0 ? 'moving upriver' : 'moving down toward the lower channel';
+
+  const statement =
+    `Reduced visibility is forecast ${motion}, from around ${nameAt(first.ext.centroid)} ` +
+    `at ${fmtClock(first.t, tz)} to around ${nameAt(last.ext.centroid)} by ${fmtClock(last.t, tz)}` +
+    (grew > 0 ? `, covering more of the channel as it goes` :
+     grew < 0 ? `, covering less of the channel as it goes` : '') + '.';
+
+  return { any: true, frames, active, drift, grew, motion, statement,
+           firstT: first.t, lastT: last.t };
+}
+
+/** Visibility at each waypoint's own ETA — the answer that actually matters. */
+function fogDuringTransit(grid, tz) {
+  return grid.points.map((p, i) => {
+    const nm = grid.valueAt(grid.primary, i, p.eta);
+    const series = grid.seriesFor(grid.primary, i);
+    const trend = series ? visTrend(series, p.eta) : 'unknown';
+    const others = grid.models.slice(1).map(m => ({ model: m.name, nm: grid.valueAt(m.name, i, p.eta) }))
+                     .filter(x => x.nm != null);
+    return { ...p, nm, level: visLevel(nm), trend, others, support: grid.supportAt(i, p.eta) };
+  });
+}
+
+/** Worst stretch of the passage, as a window with a place and a severity band. */
+function worstVisibility(rows, tz) {
+  const withData = rows.filter(r => r.nm != null);
+  if (!withData.length) return null;
+  const worst = withData.reduce((a, b) => (b.nm < a.nm ? b : a));
+  const band = withData.filter(r => r.nm <= Math.max(worst.nm * 1.6, worst.nm + 0.5));
+  const lo = Math.min(...band.map(r => r.nm)), hi = Math.max(...band.map(r => r.nm));
+  const t0 = Math.min(...band.map(r => r.eta)), t1 = Math.max(...band.map(r => r.eta));
+  const names = band.map(r => r.name);
+  return {
+    worst, lo, hi, t0, t1,
+    where: names.length === 1 ? names[0] : `${names[0]} to ${names[names.length - 1]}`,
+    level: visLevel(worst.nm)
+  };
+}
+
+/** How well the models agree, stated as a count rather than a made-up score. */
+function modelAgreement(rows, threshold) {
+  const th = threshold == null ? FOG_THRESHOLD_NM : threshold;
+  const scored = rows.filter(r => r.nm != null && r.others.length);
+  if (!scored.length) return null;
+  const target = scored.reduce((a, b) => (b.nm < a.nm ? b : a));
+  const all = [{ model: 'HRRR', nm: target.nm }, ...target.others];
+  const below = all.filter(m => m.nm < th).length;
+  const level = below === all.length ? 'STRONG' : below === 0 ? 'STRONG' : 'MODERATE';
+  return {
+    at: target.name, models: all, below, total: all.length, threshold: th, level,
+    why: below === all.length
+      ? `all ${all.length} models forecast visibility below ${th} nm near ${target.name}`
+      : below === 0
+        ? `no model forecasts visibility below ${th} nm near ${target.name}`
+        : `${below} of ${all.length} models forecast visibility below ${th} nm near ${target.name}`
+  };
+}
+
+/** Observation against forecast, reported — never used to bend the model. */
+function compareObservations(metars, grid, nowT) {
+  if (!metars || !metars.length) return [];
+  const out = [];
+  for (const m of metars) {
+    let nearest = null;
+    for (let i = 0; i < grid.points.length; i++) {
+      const p = grid.points[i];
+      const d = haversineNm({ lat: m.lat, lon: m.lon }, { lat: p.lat, lon: p.lon });
+      if (!nearest || d < nearest.d) nearest = { i, d, point: p };
+    }
+    if (!nearest) continue;
+    // Forecast valid at the observation's own time, so like is compared with like.
+    const fc = grid.valueAt(grid.primary, nearest.i, m.t);
+    let verdict = null, tracking = null;
+    if (fc != null && m.visibilityNm != null) {
+      const diff = m.visibilityNm - fc;
+      const tol = Math.max(1, fc * 0.5);
+      if (Math.abs(diff) <= tol) { verdict = 'HRRR currently tracking observed visibility well'; tracking = 'good'; }
+      else if (diff > 0) { verdict = 'HRRR currently forecasting substantially more fog than observed'; tracking = 'pessimistic'; }
+      else { verdict = 'HRRR currently forecasting less fog than observed'; tracking = 'optimistic'; }
+    }
+    out.push({ station: m.station, name: m.name, lat: m.lat, lon: m.lon,
+               observed: m.visibilityNm, at: m.t, ageMs: nowT - m.t,
+               forecast: fc, verdict, tracking,
+               nearestPoint: nearest.point.name, distanceNm: nearest.d, raw: m.raw });
+  }
+  return out.sort((a, b) => a.distanceNm - b.distanceNm);
+}
+
+/* Where you enter the fog, where it is worst, where you come out — plus how
+   much of the passage sits below each threshold, in distance and in time. */
+function fogTransitProfile(rows) {
+  const usable = rows.filter(r => r.nm != null);
+  if (!usable.length) return null;
+  const crossings = th => {
+    let enter = null, exitPt = null;
+    for (let i = 0; i < usable.length; i++) {
+      const r = usable[i];
+      if (r.nm < th && !enter) enter = r;
+      if (enter && r.nm >= th && !exitPt) { exitPt = r; break; }
+    }
+    let nm = 0, ms = 0;
+    for (let i = 0; i < usable.length - 1; i++) {
+      const a = usable[i], b = usable[i + 1];
+      if (a.nm < th && b.nm < th) {
+        nm += Math.abs(b.chainNm - a.chainNm);
+        ms += Math.abs(b.eta - a.eta);
+      }
+    }
+    return { threshold: th, enter, exit: exitPt, distanceNm: nm, durationMs: ms,
+             any: usable.some(r => r.nm < th) };
+  };
+  const worst = usable.reduce((a, b) => (b.nm < a.nm ? b : a));
+  return { below5: crossings(5), below2: crossings(2), below1: crossings(1),
+           worst, first: usable[0], last: usable[usable.length - 1] };
+}
+
+/* Material disagreement: one model calls fog, the other does not. */
+function modelDisagreements(rows, opts) {
+  const minGap = (opts && opts.minGap) || 1.5;
+  const out = [];
+  for (const r of rows) {
+    if (r.nm == null || !r.others.length) continue;
+    for (const o of r.others) {
+      const gap = Math.abs(o.nm - r.nm);
+      const straddles = (r.nm < 2 && o.nm >= 2) || (o.nm < 2 && r.nm >= 2);
+      if (gap >= minGap && straddles)
+        out.push({ point: r.name, eta: r.eta, hrrr: r.nm, model: o.model, other: o.nm, gap });
+    }
+  }
+  return out.sort((a, b) => b.gap - a.gap);
+}
 
 /* ---- NOAA CO-OPS observed currents ----
    Real-time measurements. These stop at the present moment, so they cannot
@@ -4109,11 +4510,29 @@ async function loadEnvironment(route, win) {
     }
   }));
 
+  /* One bounding-box call, purely so the brief can name the nearest station
+     that actually measures visibility and how far off the route it is. The Fog
+     tab does the full comparison; this is just the distance. */
+  let nearestObs = null;
+  if (live) {
+    try {
+      const found = await fetchMetarNear(METAR_BBOX);
+      for (const m of found) {
+        for (const p of route) {
+          const d = haversineNm({ lat: m.lat, lon: m.lon }, { lat: p.lat, lon: p.lon });
+          if (!nearestObs || d < nearestObs.distanceNm)
+            nearestObs = { station: m.station, name: m.name, observed: m.visibilityNm,
+                           at: m.t, distanceNm: d, near: p.name };
+        }
+      }
+    } catch (e) { nearestObs = null; }
+  }
+
   const available = kind => gauges
     .filter(g => gaugeData[kind][g.id])
     .map(g => ({ ...g, [kind]: true }));
 
-  return { data, sources, gaps, assign, live, gauges, gaugeData, lags, checks,
+  return { data, sources, gaps, assign, live, gauges, gaugeData, lags, checks, nearestObs,
            tideGauges: available('tide'), currentGauges: available('current') };
 }
 
@@ -4195,7 +4614,7 @@ function conditionsAt(env, point, t) {
     current: point.stations && point.stations.current
   };
   out.weather = pull('weather', a.weather, ['windKts', 'gustKts', 'windFromDeg', 'visibilityNm', 'tempF', 'dewpointF', 'humidityPct', 'thunderPct', 'popPct']);
-  out.visibility = pull('visibility', a.visibility, ['visibilityNm', 'lowCloudPct', 'modelTempF', 'modelDewF', 'modelWindKts']);
+  out.visibility = pull('visibility', a.visibility, ['visibilityNm', 'visibilityGfsNm', 'lowCloudPct', 'modelTempF', 'modelDewF', 'modelWindKts']);
 
   /* Prefer the NWS grid where it has values; fall back to the model where it
      does not, which for visibility is most of the time. */
@@ -4300,6 +4719,25 @@ function buildBrief(input) {
       if (!maxWind || w.windKts > maxWind.windKts) maxWind = { ...w, at: s.point.name, t: s.eta };
     }
 
+    /* Fog summary for What Matters. Built from the visibility already fetched
+       for each waypoint, so it costs nothing extra; the Fog tab keeps the
+       fuller 25-point analysis. Threshold logic is reused, not reimplemented. */
+    const fogRows = stops.map(st => {
+      const v = st.cond.visibility, w = st.cond.weather;
+      const nm = (v && v.visibilityNm != null) ? v.visibilityNm
+               : (w && w.visibilityNm != null ? w.visibilityNm : null);
+      const gfs = v && v.visibilityGfsNm != null ? v.visibilityGfsNm : null;
+      const key = env.assign && env.assign[st.point.id] ? env.assign[st.point.id].visibility : null;
+      const pack = key ? env.data.visibility[key] : null;
+      return {
+        name: st.point.name, chainNm: st.point.chainNm, eta: st.eta, nm,
+        trend: pack ? visTrend(pack.series, st.eta) : 'unknown',
+        others: gfs != null ? [{ model: 'GFS', nm: gfs }] : []
+      };
+    });
+    const fogSummary = fogTransitProfile(fogRows);
+    const fogSplit = modelDisagreements(fogRows);
+
     // --- pilot transfer ---
     const last = stops[stops.length - 1];
     let ladder = null;
@@ -4351,6 +4789,26 @@ function buildBrief(input) {
     if (visSpan)
       alerts.push({ t: 'Reduced visibility', d:
         `Down to ${(-visSpan.peak.v).toFixed(1)} nm, ${spanText(visSpan)}. Worst near ${visSpan.peak.st.point.name} at ${fmtClock(visSpan.peak.st.eta, tz)}.` });
+
+    /* HRRR against GFS at the ETAs. Flagged where they straddle the fog line,
+       because that is a disagreement about whether there is fog at all. */
+    const modelSplit = [];
+    for (const st of stops) {
+      const v = st.cond.visibility;
+      if (!v || v.visibilityNm == null || v.visibilityGfsNm == null) continue;
+      const gap = Math.abs(v.visibilityNm - v.visibilityGfsNm);
+      const straddles = (v.visibilityNm < 2 && v.visibilityGfsNm >= 2) ||
+                        (v.visibilityGfsNm < 2 && v.visibilityNm >= 2);
+      if (gap >= 1.5 && straddles)
+        modelSplit.push({ at: st.point.name, t: st.eta, hrrr: v.visibilityNm, gfs: v.visibilityGfsNm, gap });
+    }
+    if (modelSplit.length) {
+      const wst = modelSplit.reduce((a, b) => (b.gap > a.gap ? b : a));
+      alerts.push({ t: 'Fog forecast uncertain', d:
+        `At ${wst.at}, ETA ${fmtClock(wst.t, tz)} — HRRR ${wst.hrrr.toFixed(1)} nm, GFS ${wst.gfs.toFixed(1)} nm. ` +
+        `The models disagree about whether there is fog here${modelSplit.length > 1
+          ? `, and at ${modelSplit.length - 1} other point${modelSplit.length > 2 ? 's' : ''}` : ''}. Not averaged.` });
+    }
 
     const fogSpan = spanOf(
       st => st.cond.fog && st.cond.fog.level === 'HIGH',
@@ -4412,7 +4870,8 @@ function buildBrief(input) {
         `${noTide} of ${stops.length} waypoints lie beyond the tide gauges.` });
 
     return { input, transit, stops, env, tideEvents, currentEvents, maxCurrent,
-             maxWind, ladder, alerts, tz, thresholds, window, currentAt };
+             maxWind, ladder, alerts, tz, thresholds, window, currentAt,
+             fogSummary, fogSplit };
   });
 }
 
@@ -4810,6 +5269,35 @@ function renderBrief(b) {
       <div class="cell"><div class="k">At the station</div>
         <div class="v">${wv && wv.seaFt != null ? wv.seaFt.toFixed(1) + ' ft' : '—'}</div>
         <div class="s">${wv && wv.swellFt != null ? 'swell ' + wv.swellFt.toFixed(1) + ' ft ' + compass(wv.swellFromDeg) + ' / ' + Math.round(wv.swellPeriodS) + ' s' : 'No wave forecast'}</div></div>
+      ${(() => {
+        const f = b.fogSummary;
+        if (!f || f.worst.nm == null) return `<div class="cell wide"><div class="k">Fog</div>
+          <div class="v" style="font-size:17px;color:var(--faint)">No visibility data</div>
+          <div class="s">No model visibility returned for this route.</div></div>`;
+        const lv = visLevel(f.worst.nm);
+        const o = b.env.nearestObs;
+        const gfs = f.worst.others.length ? f.worst.others[0].nm : null;
+        const band = (label, x) => x.any
+          ? `${label}: ${fmtDuration(x.durationMs)} / ${x.distanceNm.toFixed(1)} nm`
+          : `${label}: none`;
+        return `<div class="cell wide fogcard" id="fogCard">
+          <div class="k">Fog — ${esc(lv.label.toUpperCase())} during transit</div>
+          <div class="v lvl-${lv.cls}">${f.worst.nm.toFixed(1)} nm</div>
+          <div class="s">${esc(f.worst.name)} · ETA ${fmtClock(f.worst.eta, tz)} · trend ${esc(f.worst.trend)}</div>
+          <div class="fogcard-grid">
+            <span>${band('Below 2 nm', f.below2)}</span>
+            <span>${band('Below 1 nm', f.below1)}</span>
+            <span>HRRR ${f.worst.nm.toFixed(1)} nm</span>
+            <span>${gfs != null ? 'GFS ' + gfs.toFixed(1) + ' nm' : 'GFS unavailable'}</span>
+          </div>
+          ${o ? `<div class="s" style="margin-top:7px">Nearest observation: ${esc(o.station)} ·
+            ${o.distanceNm.toFixed(1)} nm away${o.observed != null ? ' · ' + o.observed.toFixed(1) + ' nm observed' : ''}</div>`
+            : `<div class="s" style="margin-top:7px">No visibility observation nearby.</div>`}
+          ${(b.fogSplit && b.fogSplit.length) ? `<div class="s" style="margin-top:6px;color:var(--caution)">
+            Models disagree at ${esc(b.fogSplit[0].point)} — HRRR ${b.fogSplit[0].hrrr.toFixed(1)}, GFS ${b.fogSplit[0].other.toFixed(1)} nm</div>` : ''}
+          <div class="fogcard-cta">Open the Fog tab for the full analysis →</div>
+        </div>`;
+      })()}
       <div class="cell wide">${workBlock([
         wrow('Route', esc(from.name) + ' → ' + esc(to.name)),
         wrow('Distance', t.totalNm.toFixed(2) + ' nm along the marked channel'),
@@ -4860,6 +5348,8 @@ function renderBrief(b) {
     </div>`;
 
   $('#bBack').addEventListener('click', () => show('viewPlan'));
+  const fogCard = $('#fogCard');
+  if (fogCard) fogCard.addEventListener('click', () => { show('viewFog'); renderFog(); });
   renderUnderway();
   document.querySelectorAll('[data-work]').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -5666,6 +6156,214 @@ async function renderTides() {
   $('#tcTime').addEventListener('change', e => { TC.calc.time = e.target.value; renderTides(); });
 }
 
+/* =========================================================================
+   FOG VIEW
+   ======================================================================= */
+
+const FOG = { grid: null, rows: null, prog: null, metars: null, obs: null,
+              offsetH: 0, loading: false, error: null, builtFor: null };
+
+function corridorStrip(grid, t, tz) {
+  if (!grid) return '';
+  /* Sample points follow the direction of travel, so an outbound transit runs
+     down-channel. The corridor is always drawn seaward on the left, so sort by
+     chainage rather than trusting route order. */
+  const order = grid.points.map((p, i) => ({ p, i })).sort((a, b) => a.p.chainNm - b.p.chainNm);
+  const pts = order.map(o => o.p);
+  const idxOf = k => order[k].i;
+  const W = 620, H = 74, PAD = 30;
+  const lo = pts[0].chainNm, hi = pts[pts.length - 1].chainNm;
+  const span = hi - lo || 1;
+  const x = c => PAD + ((c - lo) / span) * (W - 2 * PAD);
+
+  // A band per sample point, coloured by forecast visibility at this instant.
+  const cells = pts.map((p, k) => {
+    const i = idxOf(k);
+    const v = grid.valueAt(grid.primary, i, t);
+    const lv = visLevel(v);
+    const fill = lv.cls === 'port' ? 'var(--port)' : lv.cls === 'caution' ? 'var(--caution)'
+      : lv.cls === 'stbd' ? 'var(--stbd)' : 'var(--line)';
+    const opacity = v == null ? 0.25 : Math.max(0.25, Math.min(1, 1.15 - v / 6));
+    const prev = k ? pts[k - 1].chainNm : lo;
+    const next = k < pts.length - 1 ? pts[k + 1].chainNm : hi;
+    const x0 = x((prev + p.chainNm) / 2), x1 = x((p.chainNm + next) / 2);
+    return `<rect x="${x0.toFixed(1)}" y="18" width="${Math.max(1, x1 - x0).toFixed(1)}" height="26"
+      fill="${fill}" opacity="${opacity.toFixed(2)}"/>`;
+  }).join('');
+
+  const labels = pts.filter(p => p.named).map(p =>
+    `<line x1="${x(p.chainNm).toFixed(1)}" y1="14" x2="${x(p.chainNm).toFixed(1)}" y2="48"
+       stroke="var(--ink)" stroke-width="1" opacity=".5"/>
+     <text x="${x(p.chainNm).toFixed(1)}" y="60" fill="var(--faint)" font-size="9"
+       text-anchor="middle">${esc(p.name.slice(0, 12))}</text>`).join('');
+
+  return `<svg class="corridor" viewBox="0 0 ${W} ${H}">
+    <text x="${PAD}" y="11" fill="var(--faint)" font-size="9">seaward</text>
+    <text x="${W - PAD}" y="11" fill="var(--faint)" font-size="9" text-anchor="end">Lake Charles</text>
+    ${cells}${labels}
+  </svg>`;
+}
+
+async function buildFog() {
+  if (!LAST) { FOG.error = 'Generate a transit brief first — fog is analysed along your route.'; return; }
+  const key = LAST.transit.sailEpoch + '|' + LAST.transit.waypoints[0].point.id + '|' +
+              LAST.transit.waypoints[LAST.transit.waypoints.length - 1].point.id;
+  if (FOG.builtFor === key && FOG.grid) return;
+  FOG.loading = true; FOG.error = null;
+  try {
+    const t = LAST.transit;
+    const points = fogSamplePoints(t);
+    const win = { start: Math.min(Date.now(), t.underwayEpoch) - HOUR, end: t.endEpoch + 2 * HOUR };
+    FOG.grid = await buildFogGrid(points, win);
+    FOG.rows = fogDuringTransit(FOG.grid, LAST.tz);
+    FOG.prog = fogProgression(FOG.grid, win, LAST.tz);
+    FOG.worst = worstVisibility(FOG.rows, LAST.tz);
+    FOG.agree = modelAgreement(FOG.rows);
+    FOG.profile = fogTransitProfile(FOG.rows);
+    FOG.disagree = modelDisagreements(FOG.rows);
+    try {
+      FOG.metars = await fetchMetarNear(METAR_BBOX);
+      FOG.obs = compareObservations(FOG.metars, FOG.grid, Date.now());
+      FOG.metarError = FOG.obs.length ? null : 'No station in the area is reporting visibility.';
+    } catch (e) { FOG.metars = null; FOG.obs = null; FOG.metarError = String(e.message || e); }
+    FOG.builtFor = key;
+  } catch (e) {
+    FOG.error = String(e.message || e);
+    FOG.grid = null;
+  }
+  FOG.loading = false;
+}
+
+async function renderFog() {
+  const host = $('#viewFog');
+  host.innerHTML = `<p class="eyebrow">Fog &amp; visibility</p><div class="uw">Loading model visibility…</div>`;
+  await buildFog();
+  const tz = LAST ? LAST.tz : TZ();
+
+  if (FOG.error || !FOG.grid) {
+    host.innerHTML = `<p class="eyebrow">Fog &amp; visibility</p>
+      <div class="mockbar"><b>Data unavailable</b><br>${esc(FOG.error || 'No visibility data.')}</div>`;
+    return;
+  }
+
+  const g = FOG.grid, rows = FOG.rows, w = FOG.worst;
+  const markT = Date.now() + FOG.offsetH * HOUR;
+
+  const pr = FOG.profile;
+  const ptLine = (label, r, cls) => r
+    ? `<div class="fogrow"><span class="pl"><b>${esc(label)}</b><span>${esc(r.name)}</span></span>
+        <span class="vv ${cls || ''}">${fmtClock(r.eta, tz)}<span class="tr">${r.nm.toFixed(1)} nm</span></span></div>`
+    : `<div class="fogrow"><span class="pl"><b>${esc(label)}</b><span>not expected on this passage</span></span>
+        <span class="vv lvl-gap">—</span></div>`;
+  const exposure = th => {
+    const band = th === 1 ? pr.below1 : th === 2 ? pr.below2 : pr.below5;
+    return band.any
+      ? `<div class="tcrow"><span class="ev">Below ${th} nm</span><span class="vl">${band.distanceNm.toFixed(1)} nm · ${fmtDuration(band.durationMs)}</span></div>`
+      : `<div class="tcrow"><span class="ev">Below ${th} nm</span><span class="vl lvl-stbd">none</span></div>`;
+  };
+  const summary = pr ? `
+    <div class="grid">
+      <div class="cell wide"><div class="k">Worst expected during passage</div>
+        <div class="v lvl-${visLevel(pr.worst.nm).cls}">${pr.worst.nm.toFixed(1)} nm · ${esc(visLevel(pr.worst.nm).label)}</div>
+        <div class="s">${esc(pr.worst.name)} · ETA ${fmtClock(pr.worst.eta, tz)} · ${esc(pr.worst.trend)}${
+          pr.worst.others.length ? ' · ' + pr.worst.others.map(o => esc(o.model) + ' ' + o.nm.toFixed(1) + ' nm').join(', ') : ''}</div></div>
+    </div>
+    ${ptLine('Enter below 5 nm', pr.below5.enter, 'lvl-caution')}
+    ${ptLine('Enter below 2 nm', pr.below2.enter, 'lvl-caution')}
+    ${ptLine('Enter dense fog, below 1 nm', pr.below1.enter, 'lvl-port')}
+    ${ptLine('Above 1 nm again', pr.below1.exit, 'lvl-stbd')}
+    ${ptLine('Above 2 nm again', pr.below2.exit, 'lvl-stbd')}
+    <div style="margin-top:10px">${exposure(5)}${exposure(2)}${exposure(1)}</div>
+    <p style="font-size:11.5px;color:var(--faint);margin:8px 0 0;line-height:1.5">
+      Distance and time are measured along your route between sample points below each
+      threshold. HRRR is primary; GFS is shown for comparison, never averaged in.</p>
+    ${(FOG.disagree && FOG.disagree.length) ? `<div class="alert" style="margin-top:12px"><div class="bar"></div><div>
+      <div class="t">Fog forecast uncertain</div>
+      <div class="d">${FOG.disagree.slice(0, 3).map(d =>
+        `At ${esc(d.point)}, ETA ${fmtClock(d.eta, tz)} — HRRR <b>${d.hrrr.toFixed(1)} nm</b>, ${esc(d.model)} <b>${d.other.toFixed(1)} nm</b>.`).join('<br>')}
+        <br>The models disagree about whether there is fog here. Not averaged.</div></div></div>` : ''}`
+    : '<p class="gapnote">No visibility values returned for this route.</p>';
+
+  const progHtml = `<div class="mockbar" style="border-color:var(--line);background:var(--deck);color:var(--dim)">
+    <b style="color:var(--ink)">Forecast fog progression</b><br>${esc(FOG.prog.statement)}
+    <br><span style="font-size:11px;color:var(--faint)">Describes how the forecast visibility field evolves over successive model hours. Not observed fog-bank motion.</span></div>`;
+
+  const transitHtml = rows.map(r => `<div class="fogrow">
+      <span class="pl"><b>${esc(r.name)}</b><span>ETA ${fmtClock(r.eta, tz)}${r.others.length
+        ? ' · ' + r.others.map(o => esc(o.model) + ' ' + o.nm.toFixed(1)).join(', ') : ''}</span></span>
+      <span class="vv lvl-${r.level.cls}">${r.nm != null ? r.nm.toFixed(1) + ' nm' : 'n/a'}
+        <span class="tr">${r.nm != null ? esc(r.level.label) + ' · ' + esc(r.trend) : 'data unavailable'}</span></span>
+    </div>`).join('');
+
+  const agreeHtml = FOG.agree ? `<div class="src">
+      <span class="n">Model agreement<br><span style="color:var(--faint);font-size:11px">${esc(FOG.agree.why)}</span></span>
+      <span class="st" style="font-size:14px;color:var(--ink)">${esc(FOG.agree.level)}</span>
+    </div>` : '<p class="gapnote">Only one model published visibility here — no agreement to report.</p>';
+
+  const obsHtml = (FOG.obs && FOG.obs.length) ? FOG.obs.slice(0, 5).map(o => `<div class="src">
+      <span class="n">${esc(o.station)} — ${esc(o.name)}<br>
+        <span style="color:var(--faint);font-size:11px">${o.distanceNm.toFixed(1)} nm from ${esc(o.nearestPoint)} · ${fmtDuration(o.ageMs)} old</span></span>
+      <span class="st" style="font-size:13px;color:var(--ink);text-align:right">
+        ${o.observed.toFixed(1)} nm observed
+        <br><span style="font-size:11px;color:var(--faint)">${o.forecast != null ? 'HRRR valid then ' + o.forecast.toFixed(1) + ' nm' : 'no forecast at that time'}</span>
+        ${o.verdict ? `<br><span style="font-size:11px;color:${o.tracking === 'good' ? 'var(--stbd)' : 'var(--caution)'}">${esc(o.verdict)}</span>` : ''}
+      </span></div>`).join('')
+    : `<p class="gapnote">${esc(FOG.metarError || 'No observations available.')}</p>`;
+  const nearestObsNm = (FOG.obs && FOG.obs.length) ? FOG.obs[0].distanceNm : null;
+
+  host.innerHTML = `
+    <p class="eyebrow">Fog during transit</p>
+    ${summary}
+
+    <div class="rule"></div>
+    <p class="eyebrow">Visibility at every route point</p>
+    ${transitHtml}
+
+    <div class="rule"></div>
+    ${progHtml}
+
+    <div class="rule"></div>
+    <p class="eyebrow">Corridor at ${FOG.offsetH === 0 ? 'now' : '+' + FOG.offsetH + ' h'} · ${fmtClock(markT, tz)}</p>
+    ${corridorStrip(g, markT, tz)}
+    <div class="scrub" id="fogScrub">
+      ${[0, 1, 2, 3, 6, 12].map(h =>
+        `<button data-h="${h}"${h === FOG.offsetH ? ' class="on"' : ''}>${h === 0 ? 'NOW' : '+' + h + 'H'}</button>`).join('')}
+    </div>
+    <p style="font-size:11.5px;color:var(--faint);line-height:1.55;margin:6px 0 0">
+      Red is dense fog under 1 nm, amber 1–5 nm, green above 5 nm. Grey means the model
+      published no visibility for that point.</p>
+
+    <div class="rule"></div>
+    <p class="eyebrow">Forecast vs observed</p>
+    ${obsHtml}
+    <p style="font-size:11.5px;color:var(--faint);line-height:1.55;margin:10px 0 0">
+      ${nearestObsNm != null && nearestObsNm > 10
+        ? `Nearest visibility observation is ${nearestObsNm.toFixed(0)} nm from the route — it says little about conditions at that distance. `
+        : ''}No station in the lower channel measures visibility: CAPL1 at Calcasieu Pass
+      carries wind, temperature and pressure but no visibility sensor. Forecast visibility
+      below Lake Charles is therefore unverified by any nearby observation.
+      Discrepancies are reported, never used to adjust the model.</p>
+
+    <div class="rule"></div>
+    <p class="eyebrow">Models</p>
+    ${agreeHtml}
+    <div class="src"><span class="n">Sources</span>
+      <span class="st" style="font-size:11px">${g.models.map(m => esc(m.name) + ' ' + esc(m.resolution)).join(' · ')}</span></div>
+
+    <div class="foot">
+      Visibility is a model field, not a measurement, except where an observation is
+      shown above. Windy's Point Forecast API publishes no visibility parameter, so it
+      cannot supply this; these are the raw HRRR and GFS fields Windy renders its own
+      fog layer from.<br><br>
+      Decision support only. Confirm against the GOES fog product and actual conditions:
+      <a href="https://www.ospo.noaa.gov/products/atmosphere/clouds/fls/" style="color:var(--info)">satellite fog / low stratus</a>.
+    </div>`;
+
+  document.querySelectorAll('#fogScrub button').forEach(b => b.addEventListener('click', () => {
+    FOG.offsetH = +b.dataset.h; renderFog();
+  }));
+}
+
 /* ---------- navigation ---------- */
 function show(id) {
   document.querySelectorAll('.view').forEach(v => v.classList.toggle('on', v.id === id));
@@ -5680,6 +6378,7 @@ function show(id) {
 document.querySelectorAll('#tabs button').forEach(b => b.addEventListener('click', () => {
   const id = b.dataset.tab;
   if (id === 'viewTides') { renderTides(); show('viewTides'); }
+  else if (id === 'viewFog') { show('viewFog'); renderFog(); }
   else show(LAST ? 'viewBrief' : 'viewPlan');
 }));
 $('#navBtn').addEventListener('click', () => {
