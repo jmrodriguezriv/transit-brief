@@ -88,6 +88,28 @@ button,select,input{font-family:inherit;font-size:inherit;color:inherit;font-var
 .fogrow .pl span{display:block;font-size:11px;color:var(--faint);margin-top:1px}
 .fogrow .vv{font-family:var(--mono);font-size:16px;font-weight:600;text-align:right}
 .fogrow .tr{font-size:11px;color:var(--faint);display:block;font-weight:400;font-family:var(--sans)}
+.lcgrid{display:grid;grid-template-columns:1fr;gap:8px}
+@media (min-width:520px){.lcgrid{grid-template-columns:1fr 1fr}}
+.lccard{border:1px solid var(--line);border-radius:11px;background:var(--hull);padding:13px;position:relative}
+.lccard.finish{border-color:var(--stbd)}
+.lctag{font-size:9px;font-weight:750;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--stbd);margin-bottom:4px}
+.lcname{font-size:10px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--faint)}
+.lcbig{font-family:var(--mono);font-size:21px;font-weight:600;margin-top:5px;line-height:1.2}
+.lcbig.flood{color:var(--stbd)} .lcbig.ebb{color:var(--port)} .lcbig.slack{color:var(--dim)}
+.lcsub{font-size:11.5px;color:var(--faint);margin-top:3px;line-height:1.45}
+.lcstale{font-size:10px;font-weight:750;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--caution);margin-top:5px}
+.lcline{display:flex;justify-content:space-between;gap:8px;font-size:12px;color:var(--dim);
+  margin-top:9px;padding-top:8px;border-top:1px solid var(--line-soft)}
+.lcline span:last-child{font-family:var(--mono);color:var(--ink)}
+.lccmp{font-size:11.5px;color:var(--caution);margin-top:5px;line-height:1.4}
+.lccmp.ok{color:var(--stbd)}
+.lceta{margin-top:10px;padding-top:9px;border-top:1px solid var(--line-soft)}
+.lcetak{font-size:9px;font-weight:750;letter-spacing:.14em;text-transform:uppercase;color:var(--faint)}
+.lcetav{font-family:var(--mono);font-size:16px;font-weight:600;margin-top:3px}
+.lcevent{font-size:10.5px;font-weight:750;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--caution);margin-top:7px;line-height:1.4}
 .fogcard{cursor:pointer;position:relative}
 .fogcard:active{background:var(--deck)}
 .fogcard-grid{display:grid;grid-template-columns:1fr 1fr;gap:2px 10px;margin-top:9px;
@@ -252,6 +274,11 @@ input.spd:focus{outline:none;border-color:var(--info)}
 .stop.turn::before{border-radius:1px;transform:rotate(45deg)}
 .stop.term::before{border-color:var(--stbd);background:var(--stbd);width:11px;height:11px;left:-27px}
 .stop .time{font-family:var(--mono);font-size:16px;font-weight:600;letter-spacing:-.01em}
+.stop.anchor::before{border-color:var(--info);background:var(--info)}
+.cptag{font-family:var(--sans);font-size:8.5px;font-weight:750;letter-spacing:.12em;
+  color:var(--info);margin-left:7px;vertical-align:2px}
+.orig{display:block;font-family:var(--sans);font-size:10.5px;font-weight:400;
+  color:var(--faint);letter-spacing:0;margin-top:1px}
 .stop .name{font-size:13.5px;font-weight:600;color:var(--ink);margin-top:1px}
 .stop .meta{font-size:12px;color:var(--dim);margin-top:4px;line-height:1.55}
 .stop .meta .sep{color:var(--faint);padding:0 5px}
@@ -365,7 +392,7 @@ var CHANNEL_DATA = {
    "at": "MK_35_36",
    "tide": null,
    "current": null,
-   "currentObs": "lc0101",
+   "currentObs": null,
    "chainNm": 21.566,
    "lat": 29.693367,
    "lon": -93.332655
@@ -3006,8 +3033,60 @@ function solveTransit(opts) {
     }
   }
 
+  /* ---- checkpoint anchoring ----
+     A reported passing time at a checkpoint re-anchors everything ahead of it.
+     Points already passed keep the time they were given: an actual where one
+     was reported, otherwise the original plan. Points ahead are recomputed by
+     the same distance-over-speed-over-ground logic, walked forward from the
+     anchor — not shifted by a constant offset. */
+  const originalEtas = etas.slice();
+  const anchors = (opts.anchors || [])
+    .map(a => ({ ...a, index: route.findIndex(p => p.id === a.nodeId) }))
+    .filter(a => a.index >= 0)
+    .sort((x, y) => x.index - y.index);
+
+  let anchorIndex = -1;
+  if (anchors.length) {
+    const last = anchors[anchors.length - 1];
+    anchorIndex = last.index;
+
+    // Times up to the anchor: actuals where reported, otherwise the plan.
+    for (const a of anchors) etas[a.index] = a.epoch;
+
+    // Forward from the anchor, iterating so current is sampled at the times
+    // the ship will actually be there.
+    let forward = null;
+    for (let pass = 0; pass < 6; pass++) {
+      const next = etas.slice();
+      let t = last.epoch;
+      for (let i = last.index; i < legs.length; i++) {
+        const leg = legs[i];
+        const stw = speedOverride != null ? speedOverride : leg.defaultSpeed;
+        let sog = stw;
+        if (applyCurrent && leg.currentKey) {
+          const guess = (leg.distanceNm / Math.max(stw, 0.5)) * HOUR;
+          const tMid = forward ? (forward[i] + (forward[i + 1] - forward[i]) / 2) : t + guess / 2;
+          const cur = currentAt(leg.currentKey, tMid);
+          if (cur && typeof cur.signedKts === 'number') sog = stw + dirSign * cur.signedKts;
+        }
+        sog = Math.max(sog, 1.0);
+        leg.stw = stw; leg.sog = sog;
+        t += (leg.distanceNm / sog) * HOUR;
+        next[i + 1] = t;
+      }
+      const settled = forward && Math.max(...next.map((v, i) => Math.abs(v - forward[i]))) < 20000;
+      forward = next;
+      if (settled) break;
+    }
+    for (let i = last.index; i < forward.length; i++) etas[i] = forward[i];
+  }
+
   const waypoints = route.map((p, i) => ({
     point: p, eta: etas[i],
+    originalEta: originalEtas[i],
+    deltaMs: etas[i] - originalEtas[i],
+    isAnchor: anchors.some(a => a.index === i),
+    passed: anchorIndex >= 0 && i < anchorIndex,
     legIn: i > 0 ? legs[i - 1] : null,
     legOut: i < legs.length ? legs[i] : null
   }));
@@ -3026,6 +3105,13 @@ function solveTransit(opts) {
     endEpoch: pilotOff || last.eta,
     totalNm: legs.reduce((s, l) => s + l.distanceNm, 0),
     converged, iterations, condition,
+    anchors, anchorIndex, originalEtas,
+    originalEndEpoch: (() => {
+      const lastPt = route[route.length - 1];
+      return lastPt.type === 'PILOT_STATION'
+        ? originalEtas[originalEtas.length - 1] + ch.disembarkMinutes * MIN
+        : originalEtas[originalEtas.length - 1];
+    })(),
     currentApplied: applyCurrent
   };
 }
@@ -4315,6 +4401,28 @@ function applySpeedOverrides() {
   }
 }
 
+/* Observed current comes from exactly these two stations, app-wide. Other
+   stations may still supply predictions where they publish them, but nothing
+   else is ever shown as a live measurement. Enforced here rather than repeated
+   at each call site. */
+const OBSERVED_CURRENT_STATIONS = ['G_PIER', 'G_LC'];
+const isObservedCurrentStation = id => OBSERVED_CURRENT_STATIONS.includes(id);
+
+/* Checkpoints the pilot can report passing. These are existing channel nodes —
+   no new coordinates. Ordered seaward to upriver; the control reverses them for
+   an outbound passage and only offers those still ahead. */
+const CHECKPOINTS = [
+  { id: 'MK_7_8',    label: 'Buoy 8' },
+  { id: 'MK_35_36',  label: 'Buoy 36' },
+  { id: 'MK_60',     label: 'Beacon 60' },
+  { id: 'MK_79_80',  label: 'Beacon 80' },
+  { id: 'MK_85_86',  label: 'Beacon 86' },
+  { id: 'MK_99_100', label: 'Beacon 100' },
+  { id: 'MK_106',    label: 'Beacon 106' },
+  { id: 'MK_112',    label: 'Beacon 112' },
+  { id: 'MK_115',    label: 'Beacon 115' }
+];
+
 const CACHE_KEY = 'envCache';
 const CACHE_MAX_ENTRIES = 120;
 const STALE_AFTER = { weather: 6 * HOUR, visibility: 6 * HOUR, wave: 12 * HOUR,
@@ -4478,10 +4586,14 @@ async function loadEnvironment(route, win) {
 
   /* ---- prediction check: observed vs predicted current, right now ---- */
   const checks = [];
-  await Promise.all(gauges.filter(g => live ? g.currentObs : true).map(async g => {
+  const obsData = {};
+  await Promise.all(gauges
+    .filter(isObservedCurrentStation ? g => isObservedCurrentStation(g.id) : () => true)
+    .filter(g => live ? g.currentObs : true).map(async g => {
     try {
       const obs = await P.currentObs.load(g.id, win, g, g);
       if (!obs || !obs.series.length) return;
+      obsData[g.id] = obs;
       const pred = gaugeData.current[g.id];
       const pairs = [];
       if (pred) for (const o of obs.series) {
@@ -4528,11 +4640,27 @@ async function loadEnvironment(route, win) {
     } catch (e) { nearestObs = null; }
   }
 
+  /* The live current cards compare an observation taken now against the
+     prediction for now. A transit planned for another day leaves the present
+     outside the passage window, so fetch a short window around it separately
+     rather than stretching the main one across the gap. */
+  const nowPred = {};
+  const LIVE_IDS = OBSERVED_CURRENT_STATIONS;
+  const nowWin = { start: Date.now() - 3 * HOUR, end: Date.now() + 3 * HOUR };
+  const needsNow = nowWin.start < win.start || nowWin.end > win.end;
+  if (needsNow) {
+    await Promise.all(LIVE_IDS.map(async id => {
+      const g = gauges.find(x => x.id === id);
+      if (!g || (live && !g.current)) return;
+      try { nowPred[id] = await P.current.load(g.id, nowWin, g, g); } catch (e) { nowPred[id] = null; }
+    }));
+  }
+
   const available = kind => gauges
     .filter(g => gaugeData[kind][g.id])
     .map(g => ({ ...g, [kind]: true }));
 
-  return { data, sources, gaps, assign, live, gauges, gaugeData, lags, checks, nearestObs,
+  return { data, sources, gaps, assign, live, gauges, gaugeData, lags, checks, nearestObs, obsData, nowPred,
            tideGauges: available('tide'), currentGauges: available('current') };
 }
 
@@ -4590,6 +4718,14 @@ function fogRisk(tempF, dewF, windKts, visibilityNm, lowCloudPct) {
   return { level, spreadF: spread, windKts: wind, visibilityNm, source: 'derived', why };
 }
 
+/* One wording for current everywhere: the words FLOOD, EBB and SLACK always
+   accompany the signed number so the sign can never be misread. */
+function describeCur(v) {
+  if (v == null) return '—';
+  if (Math.abs(v) < 0.1) return 'SLACK';
+  return `${Math.abs(v).toFixed(1)} kt ${v > 0 ? 'FLOOD' : 'EBB'}`;
+}
+
 function conditionsAt(env, point, t) {
   const out = { weather: null, wave: null, tide: null, current: null, missing: [] };
 
@@ -4645,7 +4781,7 @@ function buildBrief(input) {
   const thresholds = Store.get('thresholds', DEFAULT_THRESHOLDS);
 
   // Pass 1: solve with no current so we know the rough window to fetch.
-  const rough = solveTransit({ fromId: input.fromId, toId: input.toId, sailEpoch: input.sailEpoch, applyCurrent: false, speedOverride: input.speedOverride, condition: input.condition });
+  const rough = solveTransit({ fromId: input.fromId, toId: input.toId, sailEpoch: input.sailEpoch, applyCurrent: false, speedOverride: input.speedOverride, condition: input.condition, anchors: input.anchors });
   const win = { start: input.sailEpoch - HOUR, end: rough.endEpoch + 2 * HOUR };
 
   return loadEnvironment(rough.waypoints.map(w => w.point), win).then(env => {
@@ -4659,7 +4795,8 @@ function buildBrief(input) {
     };
     const transit = solveTransit({
       fromId: input.fromId, toId: input.toId, sailEpoch: input.sailEpoch,
-      speedOverride: input.speedOverride, currentAt, condition: input.condition
+      speedOverride: input.speedOverride, currentAt, condition: input.condition,
+      anchors: input.anchors
     });
 
     // Per-waypoint conditions
@@ -4738,6 +4875,93 @@ function buildBrief(input) {
     const fogSummary = fogTransitProfile(fogRows);
     const fogSplit = modelDisagreements(fogRows);
 
+    /* ---- live observed currents ----
+       Exactly two stations, always both, never route-dependent: Cameron Fishing
+       Pier at the mouth and City Docks at the head. Observed and predicted are
+       kept distinct throughout, and a missing observation is never backfilled
+       with a prediction. */
+    const LIVE_CURRENT_GAUGES = OBSERVED_CURRENT_STATIONS;
+    const STALE_OBS_MS = 30 * MIN;
+    const nowT = Date.now();
+
+    const destChain = transit.waypoints[transit.waypoints.length - 1].point.chainNm;
+    let finishGaugeId = null, finishDist = Infinity;
+    for (const id of LIVE_CURRENT_GAUGES) {
+      const g = (env.gauges || []).find(x => x.id === id);
+      if (!g) continue;
+      const d = Math.abs(g.chainNm - destChain);
+      if (d < finishDist) { finishDist = d; finishGaugeId = id; }
+    }
+
+    /* Prefer the passage window; fall back to the separately fetched window
+       around the present when the instant asked for lies outside it. */
+    const predAt = (gaugeId, t) => {
+      for (const pack of [env.gaugeData.current[gaugeId], (env.nowPred || {})[gaugeId]]) {
+        if (!pack) continue;
+        const sm = sampleSeries(pack.series, t);
+        if (sm) return lerpNum(sm.a.signedKts, sm.b ? sm.b.signedKts : null, sm.f);
+      }
+      return null;
+    };
+
+    const liveCurrents = LIVE_CURRENT_GAUGES.map(id => {
+      const g = (env.gauges || []).find(x => x.id === id);
+      const obsSrc = env.sources.find(x => x.station === id + '-obs');
+      const obsPack = env.obsData ? env.obsData[id] : null;
+      const latest = obsPack && obsPack.series.length ? obsPack.series[obsPack.series.length - 1] : null;
+
+      const out = {
+        id, name: g ? g.name : id, chainNm: g ? g.chainNm : null,
+        isFinish: id === finishGaugeId,
+        observed: latest ? latest.signedKts : null,
+        at: latest ? latest.t : null,
+        ageMs: latest ? nowT - latest.t : null,
+        stale: latest ? (nowT - latest.t) > STALE_OBS_MS : false,
+        offline: !latest,
+        error: obsSrc && obsSrc.quality === 'FAILED' ? obsSrc.error : null,
+        predictedNow: predAt(id, nowT),
+        predictedAtObs: latest ? predAt(id, latest.t) : null,
+        hasPredictions: !!env.gaugeData.current[id]
+      };
+
+      // Observed against the prediction for the same instant — reported only.
+      if (out.observed != null && out.predictedAtObs != null) {
+        const d = Math.abs(out.observed) - Math.abs(out.predictedAtObs);
+        out.deltaKts = d;
+        out.comparison = Math.abs(d) < 0.15 ? 'Close to prediction'
+          : `Running ${Math.abs(d).toFixed(1)} kt ${d > 0 ? 'stronger' : 'weaker'} than predicted`;
+      }
+
+      if (out.isFinish) {
+        const eta = transit.endEpoch;
+        out.finishEta = eta;
+        out.predictedAtEta = predAt(id, eta);
+        const before = predAt(id, eta - 30 * MIN), after = predAt(id, eta + 30 * MIN);
+        if (before != null && after != null) {
+          const mag = Math.abs(after) - Math.abs(before);
+          out.etaTrend = Math.abs(out.predictedAtEta || 0) < 0.1 ? 'slack'
+            : (mag > 0.05 ? 'increasing' : mag < -0.05 ? 'decreasing' : 'steady');
+          if ((before > 0) !== (after > 0)) out.reversal = true;
+        }
+        const pack = env.gaugeData.current[id];
+        if (pack) {
+          const wide = { start: eta - 6 * HOUR, end: eta + 6 * HOUR };
+          const slacks = findSlacks(pack.series, wide);
+          out.nextSlack = slacks.find(x => x.t > eta) || null;
+          const hi = findExtreme(pack.series, 'signedKts', { start: eta - 2 * HOUR, end: eta + 2 * HOUR }, 'max');
+          const lo = findExtreme(pack.series, 'signedKts', { start: eta - 2 * HOUR, end: eta + 2 * HOUR }, 'min');
+          const near = (x) => x && Math.abs(x.t - eta) < 45 * MIN;
+          if (Math.abs(out.predictedAtEta || 0) < 0.2) out.event = 'ARRIVING NEAR SLACK';
+          else if (near(hi) && hi.signedKts > 0.4 && Math.abs(hi.signedKts - (out.predictedAtEta || 0)) < 0.2)
+            out.event = 'ARRIVING NEAR MAX FLOOD';
+          else if (near(lo) && lo.signedKts < -0.4 && Math.abs(lo.signedKts - (out.predictedAtEta || 0)) < 0.2)
+            out.event = 'ARRIVING NEAR MAX EBB';
+          if (out.reversal) out.event = 'CURRENT REVERSAL BEFORE ARRIVAL';
+        }
+      }
+      return out;
+    });
+
     // --- pilot transfer ---
     const last = stops[stops.length - 1];
     let ladder = null;
@@ -4789,6 +5013,16 @@ function buildBrief(input) {
     if (visSpan)
       alerts.push({ t: 'Reduced visibility', d:
         `Down to ${(-visSpan.peak.v).toFixed(1)} nm, ${spanText(visSpan)}. Worst near ${visSpan.peak.st.point.name} at ${fmtClock(visSpan.peak.st.eta, tz)}.` });
+
+    /* A current event at the finish is worth surfacing above the fold, not just
+       on the station card. */
+    for (const lc of (liveCurrents || [])) {
+      if (!lc.isFinish || !lc.event) continue;
+      alerts.push({ t: lc.event, d:
+        `${lc.name} at your ETA ${fmtClock(lc.finishEta, tz)}` +
+        (lc.predictedAtEta != null ? ` — predicted ${describeCur(lc.predictedAtEta)}` : '') +
+        (lc.nextSlack ? `. Next slack ${fmtClock(lc.nextSlack.t, tz)}.` : '.') });
+    }
 
     /* HRRR against GFS at the ETAs. Flagged where they straddle the fog line,
        because that is a disagreement about whether there is fog at all. */
@@ -4871,7 +5105,7 @@ function buildBrief(input) {
 
     return { input, transit, stops, env, tideEvents, currentEvents, maxCurrent,
              maxWind, ladder, alerts, tz, thresholds, window, currentAt,
-             fogSummary, fogSplit };
+             fogSummary, fogSplit, liveCurrents };
   });
 }
 
@@ -4995,11 +5229,13 @@ async function generate() {
     const sp = parseFloat(form.speedOverride);
     LAST = await buildBrief({
       fromId: form.fromId, toId: form.toId, sailEpoch,
+      anchors: Store.get('anchors', []),
       condition: form.condition === 'LIGHT' ? LIGHT : LOADED,
       speedOverride: isFinite(sp) && sp > 0 ? sp : null,
       vessel: form.vessel
     });
     Underway.reset();
+    Store.set('anchors', []);
     Store.set('lastBrief', {
       fromId: form.fromId, toId: form.toId, sailEpoch,
       condition: form.condition, speedOverride: form.speedOverride,
@@ -5101,8 +5337,15 @@ function renderBrief(b) {
           : 'DERIVED from dewpoint depression and wind, not an NWS fog forecast') : null,
         wrow('Solve', t.converged ? t.iterations + ' passes, converged' : 'did not converge')
       ]);
-      return `<div class="stop ${cls}" style="${style}">
-        <div class="time num">${fmtClock(s.eta, tz)}</div>
+      /* Updated or actual time is dominant; the original stays beside it so the
+         pilot can see how far ahead or behind the plan the ship is running. */
+      const shifted = Math.abs(s.deltaMs || 0) >= 60000;
+      const tag = s.isAnchor ? 'ACTUAL' : (t.anchorIndex >= 0 && !s.passed && shifted ? 'UPDATED' : '');
+      const orig = (s.isAnchor || (t.anchorIndex >= 0 && !s.passed && shifted))
+        ? `<span class="orig">plan ${fmtClock(s.originalEta, tz)}${
+            s.deltaMs ? ` · ${s.deltaMs > 0 ? '+' : '−'}${fmtDuration(Math.abs(s.deltaMs))}` : ''}</span>` : '';
+      return `<div class="stop ${cls}${s.isAnchor ? ' anchor' : ''}" style="${style}">
+        <div class="time num">${fmtClock(s.eta, tz)}${tag ? `<span class="cptag">${tag}</span>` : ''}${orig}</div>
         <div class="name">${esc(p.name)}${s.legIn && s.legIn.oneWay ? ' <span class="badge gap">one-way</span>' : ''}</div>
         <div class="meta">${bits.join('<span class="sep">|</span>')}${sog}</div>
         ${work}
@@ -5232,7 +5475,9 @@ function renderBrief(b) {
           <div class="s">${fmtDay(t.sailEpoch, tz)}</div></div>
         <div><div class="k">${t.pilotOffEpoch ? 'Pilot off' : 'Arrive'}</div>
           <div class="v hero">${fmtClock(t.endEpoch, tz)}</div>
-          <div class="s">estimated</div></div>
+          <div class="s">${t.anchorIndex >= 0 && Math.abs(t.endEpoch - t.originalEndEpoch) >= 60000
+            ? `plan ${fmtClock(t.originalEndEpoch, tz)} · ${t.endEpoch > t.originalEndEpoch ? '+' : '−'}${fmtDuration(Math.abs(t.endEpoch - t.originalEndEpoch))}`
+            : 'estimated'}</div></div>
         <div><div class="k">Transit</div><div class="v">${fmtDuration(t.endEpoch - t.sailEpoch)}</div>
           <div class="s">${t.converged ? t.iterations + ' pass solve' : 'unconverged'}</div></div>
       </div>
@@ -5317,11 +5562,52 @@ function renderBrief(b) {
     </div>
 
     <div class="rule"></div>
+    <p class="eyebrow">Live observed currents</p>
+    <div class="lcgrid">
+      ${(b.liveCurrents || []).map(lc => {
+        const dirCls = lc.observed == null ? '' : Math.abs(lc.observed) < 0.1 ? 'slack'
+          : (lc.observed > 0 ? 'flood' : 'ebb');
+        return `<div class="lccard${lc.isFinish ? ' finish' : ''}">
+          ${lc.isFinish ? '<div class="lctag">Finish current</div>' : ''}
+          <div class="lcname">${esc(lc.name)}</div>
+
+          ${lc.offline
+            ? `<div class="lcbig lvl-gap">Live data unavailable</div>
+               <div class="lcsub">${esc(lc.error || 'no observations reporting')}</div>`
+            : `<div class="lcbig ${dirCls}">${describeCur(lc.observed)}</div>
+               <div class="lcsub">Observed ${fmtClock(lc.at, tz)} · ${fmtDuration(lc.ageMs)} old</div>
+               ${lc.stale ? `<div class="lcstale">Stale — ${fmtDuration(lc.ageMs)} old</div>` : ''}`}
+
+          <div class="lcline"><span>Predicted now</span><span>${lc.hasPredictions ? describeCur(lc.predictedNow) : 'no predictions here'}</span></div>
+          ${lc.comparison ? `<div class="lccmp${/Close/.test(lc.comparison) ? ' ok' : ''}">${esc(lc.comparison)}</div>` : ''}
+
+          ${lc.isFinish ? `<div class="lceta">
+            <div class="lcetak">At your ETA — ${fmtClock(lc.finishEta, tz)}</div>
+            <div class="lcetav">${lc.predictedAtEta != null
+              ? describeCur(lc.predictedAtEta) + (lc.etaTrend ? ' · ' + esc(lc.etaTrend) : '')
+              : 'no prediction available'}</div>
+            ${lc.nextSlack ? `<div class="lcsub">Next slack ${fmtClock(lc.nextSlack.t, tz)}</div>` : ''}
+            ${lc.event ? `<div class="lcevent">${esc(lc.event)}</div>` : ''}
+          </div>` : ''}
+        </div>`;
+      }).join('')}
+    </div>
+    <p style="font-size:11.5px;color:var(--faint);line-height:1.55;margin:8px 0 0">
+      Observed is a live sensor reading; predicted is the NOAA harmonic prediction. A
+      missing observation is never filled in with a prediction. Differences are reported
+      and never used to correct future predictions.</p>
+
+    <div class="rule"></div>
+    <p class="eyebrow">Update current position</p>
+    <div class="uw" id="cpBox"></div>
+
+    <div class="rule"></div>
     <p class="eyebrow">Underway</p>
     <div class="uw" id="underway"></div>
 
     <div class="rule"></div>
-    <p class="eyebrow">Timeline</p>
+    <p class="eyebrow">Timeline${t.anchorIndex >= 0
+      ? ` · updated from ${esc(t.waypoints[t.anchorIndex].point.name)}` : ''}</p>
     <div class="ribbon">${ribbon}</div>
 
     ${(b.env.checks && b.env.checks.length) ? `<div class="rule"></div>
@@ -5348,6 +5634,7 @@ function renderBrief(b) {
     </div>`;
 
   $('#bBack').addEventListener('click', () => show('viewPlan'));
+  renderCheckpoints();
   const fogCard = $('#fogCard');
   if (fogCard) fogCard.addEventListener('click', () => { show('viewFog'); renderFog(); });
   renderUnderway();
@@ -5806,6 +6093,106 @@ const Underway = {
     return log;
   }
 };
+
+/* Manual checkpoint correction. Not tracking: the pilot says where he is, the
+   app takes the clock, and everything ahead is re-solved from that point. */
+function renderCheckpoints() {
+  const box = $('#cpBox');
+  if (!box || !LAST) return;
+  const t = LAST.transit, tz = LAST.tz;
+  const anchors = Store.get('anchors', []);
+
+  // Only checkpoints on this route, in the order the ship meets them.
+  const onRoute = CHECKPOINTS
+    .map(c => ({ ...c, w: t.waypoints.find(w => w.point.id === c.id) }))
+    .filter(c => c.w);
+  const ordered = onRoute.sort((a, b) => t.waypoints.indexOf(a.w) - t.waypoints.indexOf(b.w));
+  const lastAnchorIdx = anchors.length
+    ? t.waypoints.findIndex(w => w.point.id === anchors[anchors.length - 1].nodeId) : -1;
+  const ahead = ordered.filter(c => t.waypoints.indexOf(c.w) > lastAnchorIdx);
+
+  const done = anchors.map(a => {
+    const w = t.waypoints.find(x => x.point.id === a.nodeId);
+    const c = CHECKPOINTS.find(x => x.id === a.nodeId);
+    if (!w || !c) return '';
+    return `<div class="uline"><span class="k">${esc(c.label)}</span>
+      <span class="v num">${fmtClock(a.epoch, tz)}
+        <span style="font-size:11px;color:var(--faint);font-weight:400"> actual · plan ${fmtClock(w.originalEta, tz)}</span></span></div>`;
+  }).join('');
+
+  if (!ahead.length) {
+    box.innerHTML = `${done}<p style="font-size:12px;color:var(--faint);margin:8px 0 0;line-height:1.5">
+      No checkpoints remaining ahead of the last update.</p>
+      ${anchors.length ? '<button class="btn" id="cpClear" style="margin-top:10px">Clear updates</button>' : ''}`;
+    if ($('#cpClear')) $('#cpClear').addEventListener('click', clearAnchors);
+    return;
+  }
+
+  const sel = CP.pending || ahead[0].id;
+  const now = Date.now();
+  box.innerHTML = `${done}
+    <div class="field" style="margin:${done ? '10px' : '0'} 0 10px">
+      <select class="control" id="cpSel">${ahead.map(c =>
+        `<option value="${c.id}"${c.id === sel ? ' selected' : ''}>${esc(c.label)} · plan ${fmtClock(c.w.eta, tz)}</option>`).join('')}</select>
+    </div>
+    <div class="uline"><span class="k">Passing now</span><span class="v num">${fmtClock(now, tz)}</span></div>
+    <p style="font-size:12.5px;color:var(--dim);margin:10px 0 0;line-height:1.5">
+      Update timeline from ${esc((CHECKPOINTS.find(c => c.id === sel) || {}).label)} at ${fmtClock(now, tz)}?</p>
+    <button class="generate" id="cpGo" style="margin-top:10px;padding:15px">Update</button>
+    ${anchors.length ? '<button class="btn" id="cpClear" style="margin-top:8px">Clear updates</button>' : ''}
+    <p style="font-size:11.5px;color:var(--faint);margin:8px 0 0;line-height:1.5">
+      Everything ahead is recalculated from this point — ETAs, fog, wind, tide, current,
+      the finish time and the ladder. Points already passed keep their times.</p>`;
+
+  $('#cpSel').addEventListener('change', e => { CP.pending = e.target.value; renderCheckpoints(); });
+  $('#cpGo').addEventListener('click', () => applyCheckpoint($('#cpSel').value));
+  if ($('#cpClear')) $('#cpClear').addEventListener('click', clearAnchors);
+}
+
+const CP = { pending: null, busy: false };
+
+async function rebuildWithAnchors(anchors) {
+  const saved = Store.get('lastBrief', null);
+  const src = saved || { fromId: LAST.transit.waypoints[0].point.id,
+                         toId: LAST.transit.waypoints[LAST.transit.waypoints.length - 1].point.id,
+                         sailEpoch: LAST.transit.sailEpoch,
+                         condition: LAST.transit.condition, speedOverride: '', vessel: '' };
+  LAST = await buildBrief({
+    fromId: src.fromId, toId: src.toId, sailEpoch: src.sailEpoch, anchors,
+    condition: src.condition === 'LIGHT' ? LIGHT : LOADED,
+    speedOverride: parseFloat(src.speedOverride) > 0 ? parseFloat(src.speedOverride) : null,
+    vessel: src.vessel
+  });
+  renderBrief(LAST);
+  // Fog is derived from ETAs, so force it to rebuild against the new timeline.
+  FOG.builtFor = null;
+}
+
+async function applyCheckpoint(nodeId) {
+  if (CP.busy) return;
+  CP.busy = true;
+  const btn = $('#cpGo');
+  if (btn) { btn.textContent = 'Updating…'; btn.disabled = true; }
+  try {
+    const anchors = Store.get('anchors', []).filter(a => a.nodeId !== nodeId);
+    anchors.push({ nodeId, epoch: Date.now() });
+    // keep them in the order the ship meets them
+    const order = LAST.transit.waypoints.map(w => w.point.id);
+    anchors.sort((a, b) => order.indexOf(a.nodeId) - order.indexOf(b.nodeId));
+    Store.set('anchors', anchors);
+    CP.pending = null;
+    await rebuildWithAnchors(anchors);
+  } catch (e) {
+    if (btn) { btn.textContent = 'Failed: ' + (e.message || e); btn.disabled = false; }
+  }
+  CP.busy = false;
+}
+
+async function clearAnchors() {
+  Store.set('anchors', []);
+  CP.pending = null;
+  await rebuildWithAnchors([]);
+}
 
 function renderUnderway() {
   const el = $('#underway');
