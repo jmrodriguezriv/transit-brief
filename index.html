@@ -4305,6 +4305,8 @@ const CoopsCurrent = {
     if (!series.length) throw new Error('no current predictions returned');
     return {
       series, issued: null, retrieved: Date.now(),
+      meanFloodDir: fd != null ? parseFloat(fd) : null,
+      meanEbbDir: ed != null ? parseFloat(ed) : null,
       source: 'NOAA CO-OPS ' + st + ' (harmonic current)', quality: 'LIVE'
     };
   }
@@ -4593,10 +4595,30 @@ async function loadEnvironment(route, win) {
     try {
       const obs = await P.currentObs.load(g.id, win, g, g);
       if (!obs || !obs.series.length) return;
+      /* Sign the observed magnitudes. Preference order: the station's own mean
+         flood direction from the predictions, then the mean ebb direction, then
+         the channel course at that gauge. Within 90 degrees of flood is a
+         flood; otherwise an ebb. If none of those is available the reading
+         stays unsigned and is reported as a speed with its set, never guessed
+         into a direction. */
+      const predPack = gaugeData.current[g.id];
+      let floodDir = predPack && predPack.meanFloodDir != null ? predPack.meanFloodDir : null;
+      if (floodDir == null && predPack && predPack.meanEbbDir != null)
+        floodDir = norm360(predPack.meanEbbDir + 180);
+      if (floodDir == null && g.floodDir != null) floodDir = g.floodDir;
+      obs.floodDir = floodDir;
+      obs.signed = floodDir != null;
+      for (const row of obs.series) {
+        if (row.speedKts == null) continue;
+        if (floodDir != null && row.setDeg != null)
+          row.signedKts = Math.abs(relAngle(floodDir, row.setDeg)) < 90 ? row.speedKts : -row.speedKts;
+        else row.signedKts = null;
+      }
       obsData[g.id] = obs;
       const pred = gaugeData.current[g.id];
       const pairs = [];
-      if (pred) for (const o of obs.series) {
+      if (pred && obs.signed) for (const o of obs.series) {
+        if (o.signedKts == null) continue;
         const p = sampleSeries(pred.series, o.t);
         if (!p) continue;
         pairs.push({ o: o.signedKts, p: lerpNum(p.a.signedKts, p.b ? p.b.signedKts : null, p.f) });
@@ -4604,7 +4626,10 @@ async function loadEnvironment(route, win) {
       const latest = obs.series[obs.series.length - 1];
       const bias = pairs.length >= 3
         ? pairs.reduce((s, x) => s + (x.o - x.p), 0) / pairs.length : null;
-      checks.push({ gauge: g.name, at: latest.t, observedKts: latest.signedKts,
+      checks.push({ gauge: g.name, at: latest.t,
+                    observedKts: latest.signedKts,
+                    speedKts: latest.speedKts, setDeg: latest.setDeg,
+                    signed: !!obs.signed, floodDir: obs.floodDir,
                     biasKts: bias, samples: pairs.length });
       sources.push({ station: g.id + '-obs', kind: 'currentObs',
                      name: g.name + ' — observed current', ...obs,
@@ -4836,9 +4861,15 @@ function buildBrief(input) {
     for (const sl of findSlacks(vesselCurrent, window))
       currentEvents.push({ t: sl.t, kind: 'SLACK', becoming: sl.becoming,
                            location: locateAt(transit, sl.t) });
+    /* The largest signed value is only a flood if it is actually positive. On a
+       passage spent entirely on the ebb every value is negative, so the
+       "maximum" is the weakest ebb — which must never be reported as a flood.
+       The same applies in reverse on a passage entirely on the flood. */
     for (const [x, label] of [[findExtreme(vesselCurrent, 'signedKts', window, 'max'), 'MAX FLOOD'],
                               [findExtreme(vesselCurrent, 'signedKts', window, 'min'), 'MAX EBB']]) {
       if (!x || x.signedKts == null || Math.abs(x.signedKts) < 0.15) continue;
+      if (label === 'MAX FLOOD' && x.signedKts <= 0) continue;
+      if (label === 'MAX EBB' && x.signedKts >= 0) continue;
       const ev = { t: x.t, kind: label, kts: Math.abs(x.signedKts),
                    stationName: (x.gauges || []).join(' + '),
                    location: locateAt(transit, x.t) };
@@ -4913,7 +4944,10 @@ function buildBrief(input) {
       const out = {
         id, name: g ? g.name : id, chainNm: g ? g.chainNm : null,
         isFinish: id === finishGaugeId,
-        observed: latest ? latest.signedKts : null,
+        observed: latest && latest.signedKts != null ? latest.signedKts : null,
+        observedSpeed: latest ? latest.speedKts : null,
+        setDeg: latest ? latest.setDeg : null,
+        signed: obsPack ? !!obsPack.signed : false,
         at: latest ? latest.t : null,
         ageMs: latest ? nowT - latest.t : null,
         stale: latest ? (nowT - latest.t) > STALE_OBS_MS : false,
@@ -5083,6 +5117,15 @@ function buildBrief(input) {
        than presenting the prediction as fact. */
     for (const c of (env.checks || [])) {
       if (c.biasKts == null) continue;
+      /* A difference this large is not a real current anomaly — it means the
+         observation and the prediction are not describing the same quantity.
+         Say that rather than reporting an impossible current. */
+      if (Math.abs(c.biasKts) > 4) {
+        alerts.push({ t: 'Current data mismatch', d:
+          `At ${c.gauge} the observation and the prediction differ by ${Math.abs(c.biasKts).toFixed(1)} kt, ` +
+          `too large to be a real anomaly. Treat the current at this station as unreliable and check NOAA directly.` });
+        continue;
+      }
       if (Math.abs(c.biasKts) >= 0.4)
         alerts.push({ t: 'Current running off prediction', d:
           `At ${c.gauge} the observed current is ${Math.abs(c.biasKts).toFixed(1)} kt ` +
@@ -5574,7 +5617,10 @@ function renderBrief(b) {
           ${lc.offline
             ? `<div class="lcbig lvl-gap">Live data unavailable</div>
                <div class="lcsub">${esc(lc.error || 'no observations reporting')}</div>`
-            : `<div class="lcbig ${dirCls}">${describeCur(lc.observed)}</div>
+            : `<div class="lcbig ${dirCls}">${lc.observed != null ? describeCur(lc.observed)
+                 : (lc.observedSpeed != null ? lc.observedSpeed.toFixed(1) + ' kt' : '—')}</div>
+               ${lc.observed == null && lc.observedSpeed != null
+                 ? `<div class="lcsub">Set ${lc.setDeg != null ? Math.round(lc.setDeg) + '°' : 'unknown'} · flood direction unavailable, cannot say flood or ebb</div>` : ''}
                <div class="lcsub">Observed ${fmtClock(lc.at, tz)} · ${fmtDuration(lc.ageMs)} old</div>
                ${lc.stale ? `<div class="lcstale">Stale — ${fmtDuration(lc.ageMs)} old</div>` : ''}`}
 
@@ -5615,10 +5661,15 @@ function renderBrief(b) {
     ${b.env.checks.map(c => `<div class="src">
       <span class="n">${esc(c.gauge)}<br><span style="color:var(--faint);font-size:11px">observed ${fmtClock(c.at, tz)}</span></span>
       <span class="st" style="font-size:13px;color:var(--ink);text-align:right">
-        ${Math.abs(c.observedKts) < 0.15 ? 'slack' : `${c.observedKts > 0 ? 'flood' : 'ebb'} ${Math.abs(c.observedKts).toFixed(1)} kt`}
-        ${c.biasKts != null
-          ? `<br><span style="font-size:11px;color:${Math.abs(c.biasKts) >= 0.4 ? 'var(--caution)' : 'var(--faint)'}">${c.biasKts >= 0 ? '+' : ''}${c.biasKts.toFixed(1)} kt vs predicted</span>`
-          : `<br><span style="font-size:11px;color:var(--faint)">no prediction here to compare</span>`}
+        ${!c.signed || c.observedKts == null
+          ? `${c.speedKts != null ? c.speedKts.toFixed(1) : '—'} kt${c.setDeg != null ? ' set ' + Math.round(c.setDeg) + '°' : ''}`
+          : (Math.abs(c.observedKts) < 0.15 ? 'slack'
+             : `${c.observedKts > 0 ? 'flood' : 'ebb'} ${Math.abs(c.observedKts).toFixed(1)} kt`)}
+        ${!c.signed
+          ? `<br><span style="font-size:11px;color:var(--faint)">flood direction unavailable — cannot say flood or ebb</span>`
+          : c.biasKts != null
+            ? `<br><span style="font-size:11px;color:${Math.abs(c.biasKts) >= 0.4 ? 'var(--caution)' : 'var(--faint)'}">${c.biasKts >= 0 ? '+' : ''}${c.biasKts.toFixed(1)} kt vs predicted</span>`
+            : `<br><span style="font-size:11px;color:var(--faint)">no prediction here to compare</span>`}
       </span></div>`).join('')}` : ''}
 
     <div class="rule"></div>
