@@ -4268,12 +4268,19 @@ const CoopsCurrentObs = {
     for (const [k, v] of Object.entries(q)) u.searchParams.set(k, v);
     const d = await getJSON(u.toString());
     if (d.error) throw new Error(d.error.message || 'CO-OPS error');
+    /* CO-OPS returns observed current as an UNSIGNED speed with a separate set
+       direction. Reading the speed straight into a signed field makes every
+       observation look like a flood. It is deliberately left unsigned here and
+       signed later against the station's mean flood direction, which arrives
+       with the predictions. */
     const series = (d.data || []).map(r => ({
       t: Date.parse(String(r.t).replace(' ', 'T') + 'Z'),
-      signedKts: parseFloat(r.s), setDeg: r.d != null ? parseFloat(r.d) : null
-    })).filter(r => isFinite(r.t) && isFinite(r.signedKts));
+      speedKts: Math.abs(parseFloat(r.s)),
+      setDeg: r.d != null && r.d !== '' ? parseFloat(r.d) : null,
+      signedKts: null
+    })).filter(r => isFinite(r.t) && isFinite(r.speedKts));
     if (!series.length) throw new Error('no observations returned');
-    return { series, issued: null, retrieved: Date.now(),
+    return { series, issued: null, retrieved: Date.now(), needsSigning: true,
              source: 'NOAA CO-OPS ' + st + ' (observed)', quality: 'LIVE' };
   }
 };
@@ -4303,6 +4310,10 @@ const CoopsCurrent = {
       setDeg: r.meanFloodDir != null ? parseFloat(r.meanFloodDir) : null
     })).filter(r => isFinite(r.t));
     if (!series.length) throw new Error('no current predictions returned');
+    /* Needed to sign the observed readings, which CO-OPS returns as bare
+       magnitudes. Not every row carries it, so take the first that does. */
+    const fd = rows.map(r => r.meanFloodDir).find(v => v != null && v !== '');
+    const ed = rows.map(r => r.meanEbbDir).find(v => v != null && v !== '');
     return {
       series, issued: null, retrieved: Date.now(),
       meanFloodDir: fd != null ? parseFloat(fd) : null,
