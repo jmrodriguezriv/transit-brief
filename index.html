@@ -3580,8 +3580,10 @@ function recommendLadder(inp) {
 /* ----------------------------------------------------------- ALERTS -------*/
 
 const DEFAULT_THRESHOLDS = {
-  windKts: 25,
-  gustKts: 33,
+  // Sustained 20 kt and gusts 30 kt are the levels a pilot wants promoted to
+  // What Matters. Both editable in Setup.
+  windKts: 20,
+  gustKts: 30,
   currentKts: 2.0,
   seasFt: 5.0,
   swellFt: 4.0,
@@ -3672,6 +3674,20 @@ const HTTP_TIMEOUT = 12000;
    mouth says little about a river reach twenty-five miles inland. Beyond the
    reach the brief says no data instead of guessing. */
 const DEFAULT_REACH = { tide: 12, current: 6 };
+
+/* Rain intensity in mm per hour, the usual meteorological bands. Below the
+   trace threshold nothing is promoted to What Matters — the normal weather
+   brief still shows it. */
+const RAIN_TRACE_MM = 0.5;
+const RAIN_MODERATE_MM = 2.5;
+const RAIN_HEAVY_MM = 7.6;
+
+function rainIntensity(mm) {
+  if (mm == null || mm < RAIN_TRACE_MM) return null;
+  if (mm >= RAIN_HEAVY_MM) return { key: 'HEAVY', label: 'Heavy rain' };
+  if (mm >= RAIN_MODERATE_MM) return { key: 'MODERATE', label: 'Moderate rain' };
+  return { key: 'LIGHT', label: 'Light rain' };
+}
 
 async function getJSON(url, opts) {
   const ctl = new AbortController();
@@ -3825,7 +3841,8 @@ const OpenMeteoVisibility = {
     const u = new URL('https://api.open-meteo.com/v1/forecast');
     u.searchParams.set('latitude', node.lat.toFixed(4));
     u.searchParams.set('longitude', node.lon.toFixed(4));
-    u.searchParams.set('hourly', 'visibility,temperature_2m,dew_point_2m,wind_speed_10m,cloud_cover_low');
+    u.searchParams.set('hourly',
+      'visibility,temperature_2m,dew_point_2m,wind_speed_10m,cloud_cover_low,precipitation,precipitation_probability');
     u.searchParams.set('temperature_unit', 'fahrenheit');
     u.searchParams.set('wind_speed_unit', 'kn');
     u.searchParams.set('timezone', 'UTC');
@@ -3840,12 +3857,15 @@ const OpenMeteoVisibility = {
     const pick = base => h[base + (model ? '_' + model : '')] || h[base] || [];
     const vis = pick('visibility'), temp = pick('temperature_2m'),
           dew = pick('dew_point_2m'), wind = pick('wind_speed_10m'), lcc = pick('cloud_cover_low');
+    const precip = pick('precipitation'), pop = pick('precipitation_probability');
     const visGfs = h['visibility_gfs_seamless'] || null;
     const series = h.time.map((iso, i) => ({
       t: Date.parse(iso + 'Z'),
       visibilityNm: vis[i] != null ? vis[i] / 1852 : null,
       visibilityGfsNm: visGfs && visGfs[i] != null ? visGfs[i] / 1852 : null,
       lowCloudPct: lcc[i] != null ? lcc[i] : null,
+      precipMm: precip[i] != null ? precip[i] : null,
+      precipPct: pop[i] != null ? pop[i] : null,
       modelTempF: temp[i], modelDewF: dew[i], modelWindKts: wind[i]
     })).filter(r => isFinite(r.t));
     const withVis = series.filter(r => r.visibilityNm != null).length;
@@ -4762,6 +4782,118 @@ function describeCur(v) {
   return `${Math.abs(v).toFixed(1)} kt ${v > 0 ? 'FLOOD' : 'EBB'}`;
 }
 
+/* ---------------------------------------------------------------------------
+   RAIN AND WIND ALONG THE TRANSIT
+   Both follow the ship: each waypoint is read at the ETA the ship reaches it,
+   using the forecasts already fetched for the brief. No extra requests, no
+   second route model.
+   ------------------------------------------------------------------------- */
+
+/** Contiguous runs of stops satisfying a test, so a spell can be described. */
+function runsOf(stops, test) {
+  const runs = [];
+  let cur = null;
+  for (const st of stops) {
+    if (test(st)) { if (!cur) { cur = [st]; runs.push(cur); } else cur.push(st); }
+    else cur = null;
+  }
+  return runs;
+}
+
+function transitRain(stops) {
+  const rateAt = st => {
+    const v = st.cond.visibility;
+    return v && v.precipMm != null ? v.precipMm : null;
+  };
+  const wet = stops.filter(st => {
+    const mm = rateAt(st);
+    return mm != null && mm >= RAIN_TRACE_MM;
+  });
+  if (!wet.length) return null;
+
+  const peak = wet.reduce((a, b) => (rateAt(b) > rateAt(a) ? b : a));
+  const runs = runsOf(stops, st => {
+    const mm = rateAt(st);
+    return mm != null && mm >= RAIN_TRACE_MM;
+  });
+  const first = wet[0], last = wet[wet.length - 1];
+
+  // Time in rain summed over the spells, not simply first to last.
+  let ms = 0;
+  for (const run of runs) if (run.length > 1) ms += run[run.length - 1].eta - run[0].eta;
+  if (!ms && wet.length === 1) ms = 0;
+
+  // Thunder comes from the NWS grid, which publishes it as a probability.
+  let thunder = null;
+  for (const st of stops) {
+    const w = st.cond.weather;
+    if (!w || w.thunderPct == null) continue;
+    if (!thunder || w.thunderPct > thunder.pct)
+      thunder = { pct: w.thunderPct, at: st.point.name, eta: st.eta };
+  }
+
+  /* Heavy rain reduces visibility, but that is a different hazard from fog and
+     is only mentioned where the model's own visibility supports it. */
+  let visHit = null;
+  for (const st of wet) {
+    const v = st.cond.visibility;
+    if (!v || v.visibilityNm == null) continue;
+    const mm = rateAt(st);
+    if (mm >= RAIN_MODERATE_MM && v.visibilityNm < 3 &&
+        (!visHit || v.visibilityNm < visHit.nm))
+      visHit = { nm: v.visibilityNm, at: st.point.name, eta: st.eta };
+  }
+
+  return {
+    first, last, peak,
+    peakMm: rateAt(peak),
+    intensity: rainIntensity(rateAt(peak)),
+    continuous: runs.length === 1,
+    spells: runs.length,
+    durationMs: ms,
+    thunder: thunder && thunder.pct >= 30 ? thunder : null,
+    visibility: visHit
+  };
+}
+
+function transitWind(stops, thresholds) {
+  const sustainedLimit = thresholds.windKts;
+  const gustLimit = thresholds.gustKts;
+  const w = st => st.cond.weather;
+
+  const windy = stops.filter(st => w(st) && w(st).windKts != null && w(st).windKts >= sustainedLimit);
+  const gusty = stops.filter(st => w(st) && w(st).gustKts != null && w(st).gustKts >= gustLimit);
+  if (!windy.length && !gusty.length) return null;
+
+  const rated = stops.filter(st => w(st) && w(st).windKts != null);
+  const maxWind = rated.length ? rated.reduce((a, b) => (w(b).windKts > w(a).windKts ? b : a)) : null;
+  const gusted = stops.filter(st => w(st) && w(st).gustKts != null);
+  const maxGust = gusted.length ? gusted.reduce((a, b) => (w(b).gustKts > w(a).gustKts ? b : a)) : null;
+
+  const runs = runsOf(stops, st => w(st) && w(st).windKts != null && w(st).windKts >= sustainedLimit);
+  let ms = 0;
+  for (const run of runs) if (run.length > 1) ms += run[run.length - 1].eta - run[0].eta;
+
+  // Where it drops back below the limit, if it does before the end.
+  let dropsBelow = null;
+  if (windy.length) {
+    const lastWindy = windy[windy.length - 1];
+    const idx = stops.indexOf(lastWindy);
+    if (idx >= 0 && idx < stops.length - 1) dropsBelow = stops[idx + 1];
+  }
+
+  return {
+    sustainedLimit, gustLimit,
+    exceedsSustained: windy.length > 0,
+    exceedsGust: gusty.length > 0,
+    first: windy[0] || null,
+    firstGust: gusty[0] || null,
+    maxWind, maxGust, dropsBelow,
+    durationMs: ms,
+    spells: runs.length
+  };
+}
+
 function conditionsAt(env, point, t) {
   const out = { weather: null, wave: null, tide: null, current: null, missing: [] };
 
@@ -4786,7 +4918,7 @@ function conditionsAt(env, point, t) {
     current: point.stations && point.stations.current
   };
   out.weather = pull('weather', a.weather, ['windKts', 'gustKts', 'windFromDeg', 'visibilityNm', 'tempF', 'dewpointF', 'humidityPct', 'thunderPct', 'popPct']);
-  out.visibility = pull('visibility', a.visibility, ['visibilityNm', 'visibilityGfsNm', 'lowCloudPct', 'modelTempF', 'modelDewF', 'modelWindKts']);
+  out.visibility = pull('visibility', a.visibility, ['visibilityNm', 'visibilityGfsNm', 'lowCloudPct', 'precipMm', 'precipPct', 'modelTempF', 'modelDewF', 'modelWindKts']);
 
   /* Prefer the NWS grid where it has values; fall back to the model where it
      does not, which for visibility is most of the time. */
@@ -5024,8 +5156,47 @@ function buildBrief(input) {
 
     // --- alerts ---
     const alerts = [];
-    if (maxWind && maxWind.windKts >= thresholds.windKts)
-      alerts.push({ t: 'Strong wind', d: `${Math.round(maxWind.windKts)} kt from ${compass(maxWind.windFromDeg)} near ${maxWind.at} around ${fmtClock(maxWind.t, tz)}.` });
+    /* Wind and rain promoted into What Matters, evaluated at the ETA of each
+       waypoint rather than as one figure for the night. The per-waypoint wind
+       shown on the timeline is untouched. */
+    const windAnalysis = transitWind(stops, thresholds);
+    if (windAnalysis) {
+      const mw = windAnalysis.maxWind, mg = windAnalysis.maxGust;
+      const parts = [];
+      if (windAnalysis.exceedsSustained && windAnalysis.first)
+        parts.push(`Exceeds ${thresholds.windKts} kt from ${windAnalysis.first.point.name}, ETA ${fmtClock(windAnalysis.first.eta, tz)}.`);
+      if (mw)
+        parts.push(`Maximum sustained ${Math.round(mw.cond.weather.windKts)} kt from ${compass(mw.cond.weather.windFromDeg)} near ${mw.point.name}, ETA ${fmtClock(mw.eta, tz)}.`);
+      if (mg && mg.cond.weather.gustKts != null)
+        parts.push(`Maximum gust ${Math.round(mg.cond.weather.gustKts)} kt near ${mg.point.name}.`);
+      if (windAnalysis.durationMs > 0)
+        parts.push(`Above ${thresholds.windKts} kt for about ${fmtDuration(windAnalysis.durationMs)}.`);
+      if (windAnalysis.dropsBelow)
+        parts.push(`Below ${thresholds.windKts} kt again by ${windAnalysis.dropsBelow.point.name}, ETA ${fmtClock(windAnalysis.dropsBelow.eta, tz)}.`);
+      alerts.push({
+        t: windAnalysis.exceedsSustained ? 'High winds during transit' : 'Strong gusts during transit',
+        d: windAnalysis.exceedsSustained ? parts.join(' ')
+          : `Sustained wind stays below ${thresholds.windKts} kt, but gusts reach ` +
+            `${Math.round(mg.cond.weather.gustKts)} kt near ${mg.point.name}, ETA ${fmtClock(mg.eta, tz)}. ` +
+            `Sustained there ${Math.round(mg.cond.weather.windKts)} kt.`
+      });
+    }
+
+    const rainAnalysis = transitRain(stops);
+    if (rainAnalysis) {
+      const r = rainAnalysis;
+      const bits = [
+        `${r.intensity.label} beginning near ${r.first.point.name}, ETA ${fmtClock(r.first.eta, tz)}.`,
+        r.last !== r.first ? `Expected through ${r.last.point.name}, ${fmtClock(r.last.eta, tz)}.` : '',
+        r.durationMs > 0 ? `About ${fmtDuration(r.durationMs)} in rain${r.continuous ? '' : `, in ${r.spells} separate spells`}.` : '',
+        `Peak ${r.peakMm.toFixed(1)} mm/h near ${r.peak.point.name}.`,
+        r.visibility ? `Visibility down to ${r.visibility.nm.toFixed(1)} nm in the heavier rain near ${r.visibility.at} — a separate hazard from fog.` : ''
+      ].filter(Boolean);
+      alerts.push({ t: `${r.intensity.label} during transit`, d: bits.join(' ') });
+      if (r.thunder)
+        alerts.push({ t: 'Thunderstorms during transit', d:
+          `Up to ${Math.round(r.thunder.pct)}% chance near ${r.thunder.at}, ETA ${fmtClock(r.thunder.eta, tz)}.` });
+    }
 
     if (maxCurrent && maxCurrent.kts >= thresholds.currentKts)
       alerts.push({ t: 'Strong current', d: `${maxCurrent.kind.toLowerCase()} ${maxCurrent.kts.toFixed(1)} kt at ${fmtClock(maxCurrent.t, tz)}. ${maxCurrent.location.label}.` });
@@ -5104,19 +5275,8 @@ function buildBrief(input) {
           `Air and dewpoint closing ${spanText(modSpan)}. Worth a look at the satellite product.` });
     }
 
-    const thunderSpan = spanOf(
-      st => st.cond.weather && st.cond.weather.thunderPct != null && st.cond.weather.thunderPct >= 30,
-      st => st.cond.weather.thunderPct);
-    if (thunderSpan)
-      alerts.push({ t: 'Thunderstorms', d:
-        `Up to ${Math.round(thunderSpan.peak.v)}% chance, ${spanText(thunderSpan)}.` });
-
-    const gustSpan = spanOf(
-      st => st.cond.weather && st.cond.weather.gustKts != null && st.cond.weather.gustKts >= thresholds.gustKts,
-      st => st.cond.weather.gustKts);
-    if (gustSpan)
-      alerts.push({ t: 'Gusts', d:
-        `To ${Math.round(gustSpan.peak.v)} kt, ${spanText(gustSpan)}.` });
+    /* Thunder and gusts are reported inside the rain and wind cards above,
+       which follow the ship rather than summarising the whole night. */
     if (ladder && ladder.status === 'MIXED')
       alerts.push({ t: 'Ladder review', d: ladder.notes.join(' ') });
     const lowTide = tideEvents.filter(e => e.kind === 'LOW').sort((a, b) => a.heightFt - b.heightFt)[0];
