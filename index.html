@@ -277,6 +277,10 @@ input.spd:focus{outline:none;border-color:var(--info)}
 .stop.anchor::before{border-color:var(--info);background:var(--info)}
 .cptag{font-family:var(--sans);font-size:8.5px;font-weight:750;letter-spacing:.12em;
   color:var(--info);margin-left:7px;vertical-align:2px}
+.stop.done .time,.stop.done .name{opacity:.55}
+.cptag.past{color:var(--faint)}
+.cpstatus{font-size:12.5px;color:var(--info);line-height:1.5;font-weight:600}
+.cpstatus span{display:block;font-size:11px;color:var(--faint);font-weight:400;margin-top:2px}
 .orig{display:block;font-family:var(--sans);font-size:10.5px;font-weight:400;
   color:var(--faint);letter-spacing:0;margin-top:1px}
 .stop .name{font-size:13.5px;font-weight:600;color:var(--ink);margin-top:1px}
@@ -3678,6 +3682,31 @@ const DEFAULT_REACH = { tide: 12, current: 6 };
 /* Rain intensity in mm per hour, the usual meteorological bands. Below the
    trace threshold nothing is promoted to What Matters — the normal weather
    brief still shows it. */
+/* ---------------------------------------------------------------------------
+   GET-OFF BUOY
+   Operational logic supplied by the pilot, not derived from any published
+   table. Thresholds are minimum drafts: a draft at or above a row's feet, and
+   below the next row's, takes that buoy. Defined once, here, so it can be
+   changed in one place.
+   ------------------------------------------------------------------------- */
+const GET_OFF_BUOYS = [
+  { minDraftFt: 37.5, nodeId: 'MK_1_2',   label: 'Buoy 1/2' },
+  { minDraftFt: 36.0, nodeId: 'MK_14',    label: 'Buoy 14' },
+  { minDraftFt: 35.0, nodeId: 'MK_18',    label: 'Buoy 18' },
+  { minDraftFt: 33.0, nodeId: 'MK_22',    label: 'Buoy 22' },
+  { minDraftFt: 30.0, nodeId: 'MK_23_24', label: 'Buoy 24' }
+];
+const GET_OFF_MIN_DRAFT_FT = 30.0;
+
+function getOffBuoyFor(draftFt) {
+  if (draftFt == null || !isFinite(draftFt)) return null;
+  if (draftFt < GET_OFF_MIN_DRAFT_FT)
+    return { undefinedRule: true, draftFt };
+  for (const row of GET_OFF_BUOYS)
+    if (draftFt >= row.minDraftFt) return { ...row, draftFt };
+  return { undefinedRule: true, draftFt };
+}
+
 const RAIN_TRACE_MM = 0.5;
 const RAIN_MODERATE_MM = 2.5;
 const RAIN_HEAVY_MM = 7.6;
@@ -4441,20 +4470,10 @@ function applySpeedOverrides() {
 const OBSERVED_CURRENT_STATIONS = ['G_PIER', 'G_LC'];
 const isObservedCurrentStation = id => OBSERVED_CURRENT_STATIONS.includes(id);
 
-/* Checkpoints the pilot can report passing. These are existing channel nodes —
-   no new coordinates. Ordered seaward to upriver; the control reverses them for
-   an outbound passage and only offers those still ahead. */
-const CHECKPOINTS = [
-  { id: 'MK_7_8',    label: 'Buoy 8' },
-  { id: 'MK_35_36',  label: 'Buoy 36' },
-  { id: 'MK_60',     label: 'Beacon 60' },
-  { id: 'MK_79_80',  label: 'Beacon 80' },
-  { id: 'MK_85_86',  label: 'Beacon 86' },
-  { id: 'MK_99_100', label: 'Beacon 100' },
-  { id: 'MK_106',    label: 'Beacon 106' },
-  { id: 'MK_112',    label: 'Beacon 112' },
-  { id: 'MK_115',    label: 'Beacon 115' }
-];
+/* Position reports use the route itself — every waypoint the transit passes,
+   in the order the ship meets them. Route order already encodes direction, so
+   inbound and outbound both work without assuming waypoint numbers increase
+   with travel. No separate list to fall out of step with the channel data. */
 
 const CACHE_KEY = 'envCache';
 const CACHE_MAX_ENTRIES = 120;
@@ -4805,11 +4824,17 @@ function transitRain(stops) {
     const v = st.cond.visibility;
     return v && v.precipMm != null ? v.precipMm : null;
   };
-  const wet = stops.filter(st => {
-    const mm = rateAt(st);
-    return mm != null && mm >= RAIN_TRACE_MM;
-  });
-  if (!wet.length) return null;
+  /* Three outcomes, and they must never be confused: rain expected, none
+     expected, or no data at all. Missing data is not a dry forecast. */
+  const withData = stops.filter(st => rateAt(st) != null);
+  if (!withData.length) return { status: 'NO_DATA' };
+
+  const wet = withData.filter(st => rateAt(st) >= RAIN_TRACE_MM);
+  if (!wet.length) {
+    const maxTrace = withData.reduce((a, b) => (rateAt(b) > rateAt(a) ? b : a));
+    return { status: 'NONE', peakMm: rateAt(maxTrace),
+             coverage: withData.length, total: stops.length };
+  }
 
   const peak = wet.reduce((a, b) => (rateAt(b) > rateAt(a) ? b : a));
   const runs = runsOf(stops, st => {
@@ -4845,6 +4870,7 @@ function transitRain(stops) {
   }
 
   return {
+    status: 'RAIN',
     first, last, peak,
     peakMm: rateAt(peak),
     intensity: rainIntensity(rateAt(peak)),
@@ -5139,6 +5165,29 @@ function buildBrief(input) {
       return out;
     });
 
+    /* Get-off buoy, sailings only. The draft is optional and the app works
+       unchanged without it. */
+    let getOff = null;
+    const draftFt = parseFloat(input.draftFt);
+    if (isFinite(draftFt) && draftFt > 0) {
+      const rule = getOffBuoyFor(draftFt);
+      if (!transit.outbound) {
+        getOff = { draftFt, inbound: true };
+      } else if (rule && rule.undefinedRule) {
+        getOff = { draftFt, undefinedRule: true };
+      } else if (rule) {
+        const st = stops.find(x => x.point.id === rule.nodeId);
+        getOff = {
+          draftFt, label: rule.label, nodeId: rule.nodeId,
+          onRoute: !!st,
+          eta: st ? st.eta : null,
+          cond: st ? st.cond : null,
+          // Does the recommendation match where the job actually ends?
+          matchesDestination: transit.waypoints[transit.waypoints.length - 1].point.id === rule.nodeId
+        };
+      }
+    }
+
     // --- pilot transfer ---
     const last = stops[stops.length - 1];
     let ladder = null;
@@ -5183,7 +5232,16 @@ function buildBrief(input) {
     }
 
     const rainAnalysis = transitRain(stops);
-    if (rainAnalysis) {
+    if (rainAnalysis && rainAnalysis.status === 'NO_DATA') {
+      alerts.push({ info: true, t: 'Rain data unavailable', d:
+        'No precipitation forecast was returned for this route. This is not the same as ' +
+        'no rain — the rain check could not be made.' });
+    } else if (rainAnalysis && rainAnalysis.status === 'NONE') {
+      alerts.push({ info: true, t: 'Rain during transit — none expected', d:
+        `Precipitation checked at every waypoint along your route at its ETA. ` +
+        `Nothing above ${RAIN_TRACE_MM.toFixed(1)} mm/h expected` +
+        (rainAnalysis.peakMm > 0 ? `; peak forecast ${rainAnalysis.peakMm.toFixed(1)} mm/h.` : '.') });
+    } else if (rainAnalysis) {
       const r = rainAnalysis;
       const bits = [
         `${r.intensity.label} beginning near ${r.first.point.name}, ETA ${fmtClock(r.first.eta, tz)}.`,
@@ -5319,7 +5377,7 @@ function buildBrief(input) {
 
     return { input, transit, stops, env, tideEvents, currentEvents, maxCurrent,
              maxWind, ladder, alerts, tz, thresholds, window, currentAt,
-             fogSummary, fogSplit, liveCurrents };
+             fogSummary, fogSplit, liveCurrents, getOff };
   });
 }
 
@@ -5393,7 +5451,7 @@ function renderPlan() {
         <div class="row2">
           <div class="field"><label for="fLoa">LOA (m)</label>
             <input class="control" id="fLoa" inputmode="decimal" value="${esc(form.loa)}"></div>
-          <div class="field"><label for="fDraft">Draft (m)</label>
+          <div class="field"><label for="fDraft">Draft (ft)</label>
             <input class="control" id="fDraft" inputmode="decimal" value="${esc(form.draft)}"></div>
         </div>
         <div class="field"><label for="fSpeed">Speed override (kt through water)</label>
@@ -5446,14 +5504,14 @@ async function generate() {
       anchors: Store.get('anchors', []),
       condition: form.condition === 'LIGHT' ? LIGHT : LOADED,
       speedOverride: isFinite(sp) && sp > 0 ? sp : null,
-      vessel: form.vessel
+      vessel: form.vessel, draftFt: form.draft
     });
     Underway.reset();
     Store.set('anchors', []);
     Store.set('lastBrief', {
       fromId: form.fromId, toId: form.toId, sailEpoch,
       condition: form.condition, speedOverride: form.speedOverride,
-      vessel: form.vessel, generatedAt: Date.now()
+      vessel: form.vessel, draftFt: form.draft, generatedAt: Date.now()
     });
     renderBrief(LAST); show('viewBrief');
   } catch (e) {
@@ -5554,12 +5612,14 @@ function renderBrief(b) {
       /* Updated or actual time is dominant; the original stays beside it so the
          pilot can see how far ahead or behind the plan the ship is running. */
       const shifted = Math.abs(s.deltaMs || 0) >= 60000;
-      const tag = s.isAnchor ? 'ACTUAL' : (t.anchorIndex >= 0 && !s.passed && shifted ? 'UPDATED' : '');
+      const tag = s.isAnchor ? 'ACTUAL'
+        : s.passed ? 'PASSED'
+        : (t.anchorIndex >= 0 && shifted ? 'UPDATED' : '');
       const orig = (s.isAnchor || (t.anchorIndex >= 0 && !s.passed && shifted))
         ? `<span class="orig">plan ${fmtClock(s.originalEta, tz)}${
             s.deltaMs ? ` · ${s.deltaMs > 0 ? '+' : '−'}${fmtDuration(Math.abs(s.deltaMs))}` : ''}</span>` : '';
-      return `<div class="stop ${cls}${s.isAnchor ? ' anchor' : ''}" style="${style}">
-        <div class="time num">${fmtClock(s.eta, tz)}${tag ? `<span class="cptag">${tag}</span>` : ''}${orig}</div>
+      return `<div class="stop ${cls}${s.isAnchor ? ' anchor' : ''}${s.passed ? ' done' : ''}" style="${style}">
+        <div class="time num">${fmtClock(s.eta, tz)}${tag ? `<span class="cptag${tag === 'PASSED' ? ' past' : ''}">${tag}</span>` : ''}${orig}</div>
         <div class="name">${esc(p.name)}${s.legIn && s.legIn.oneWay ? ' <span class="badge gap">one-way</span>' : ''}</div>
         <div class="meta">${bits.join('<span class="sep">|</span>')}${sog}</div>
         ${work}
@@ -5703,6 +5763,38 @@ function renderBrief(b) {
     <div class="rule"></div>
     <p class="eyebrow">What matters</p>
     <div class="grid">
+      ${(() => {
+        const g = b.getOff;
+        if (!g) return '';
+        if (g.inbound) return `<div class="cell wide"><div class="k">Vessel draft</div>
+          <div class="v" style="font-size:19px">${g.draftFt.toFixed(1)} ft</div>
+          <div class="s">Inbound job — no get-off buoy applies.</div></div>`;
+        if (g.undefinedRule) return `<div class="cell wide"><div class="k">Get-off buoy</div>
+          <div class="v" style="font-size:17px;color:var(--caution)">Not defined for this draft</div>
+          <div class="s">${g.draftFt.toFixed(1)} ft is below the ${GET_OFF_MIN_DRAFT_FT.toFixed(0)} ft
+            floor of the mapping. No buoy assigned.</div></div>`;
+        const w = g.cond && g.cond.weather, wv = g.cond && g.cond.wave, vi = g.cond && g.cond.visibility;
+        const line = [];
+        if (w && w.windKts != null)
+          line.push(`Wind ${compass(w.windFromDeg)} ${Math.round(w.windKts)}${
+            w.gustKts != null && w.gustKts - w.windKts > 3 ? ' G' + Math.round(w.gustKts) : ''} kt`);
+        if (wv && wv.seaFt != null)
+          line.push(`Seas ${wv.seaFt.toFixed(1)} ft${wv.swellFt != null ? ` · swell ${wv.swellFt.toFixed(1)} ft` : ''}`);
+        const visNm = vi && vi.visibilityNm != null ? vi.visibilityNm
+                    : (w && w.visibilityNm != null ? w.visibilityNm : null);
+        if (visNm != null) line.push(`Vis ${visNm.toFixed(1)} nm`);
+        return `<div class="cell wide"><div class="k">Get-off buoy</div>
+          <div class="v" style="color:var(--stbd)">${esc(g.label)}</div>
+          <div class="s">Draft ${g.draftFt.toFixed(1)} ft${
+            g.onRoute && g.eta ? ` · ETA ${fmtClock(g.eta, tz)}` : ' · not on this route'}</div>
+          ${line.length ? `<div class="s" style="margin-top:5px">${line.join(' · ')}</div>` : ''}
+          ${!g.matchesDestination && g.onRoute
+            ? `<div class="s" style="margin-top:5px;color:var(--caution)">This job is planned to
+               ${esc(to.name)}, not ${esc(g.label)}.</div>`
+            : (!g.onRoute ? `<div class="s" style="margin-top:5px;color:var(--caution)">
+               ${esc(g.label)} is not on the selected route.</div>` : '')}
+        </div>`;
+      })()}
       <div class="cell"><div class="k">Max wind</div>
         <div class="v">${b.maxWind ? Math.round(b.maxWind.windKts) + (b.maxWind.gustKts ? ' G' + Math.round(b.maxWind.gustKts) : '') : '—'}</div>
         <div class="s">${b.maxWind ? compass(b.maxWind.windFromDeg) + ' near ' + esc(b.maxWind.at) : 'No forecast'}</div></div>
@@ -5815,12 +5907,18 @@ function renderBrief(b) {
       and never used to correct future predictions.</p>
 
     <div class="rule"></div>
-    <p class="eyebrow">Update current position</p>
+    <p class="eyebrow">Update ETA</p>
     <div class="uw" id="cpBox"></div>
 
     <div class="rule"></div>
     <p class="eyebrow">Underway</p>
     <div class="uw" id="underway"></div>
+
+    ${t.anchorIndex >= 0 ? `<div class="mockbar" style="border-color:rgba(78,155,209,.4);background:rgba(78,155,209,.08);color:#A9CDE8">
+      <b style="color:var(--info)">ETAs updated</b><br>
+      At ${esc(t.waypoints[t.anchorIndex].point.name)} · ${fmtClock(t.waypoints[t.anchorIndex].eta, tz)}.
+      Everything ahead — including fog, rain, wind, tide, current and the ladder — is
+      evaluated at the revised times.</div>` : ''}
 
     <div class="rule"></div>
     <p class="eyebrow">Timeline${t.anchorIndex >= 0
@@ -6316,62 +6414,81 @@ const Underway = {
   }
 };
 
-/* Manual checkpoint correction. Not tracking: the pilot says where he is, the
-   app takes the clock, and everything ahead is re-solved from that point. */
+/* Position reporting. Not tracking: the pilot says where the ship is and when,
+   and everything ahead is re-solved from that point. The anchor feeds the
+   transit solve, so the ETAs it produces are the single set every other
+   feature reads — fog, rain, wind, tide, current and the ladder all follow
+   automatically rather than being patched individually. */
 function renderCheckpoints() {
   const box = $('#cpBox');
   if (!box || !LAST) return;
   const t = LAST.transit, tz = LAST.tz;
   const anchors = Store.get('anchors', []);
 
-  // Only checkpoints on this route, in the order the ship meets them.
-  const onRoute = CHECKPOINTS
-    .map(c => ({ ...c, w: t.waypoints.find(w => w.point.id === c.id) }))
-    .filter(c => c.w);
-  const ordered = onRoute.sort((a, b) => t.waypoints.indexOf(a.w) - t.waypoints.indexOf(b.w));
-  const lastAnchorIdx = anchors.length
-    ? t.waypoints.findIndex(w => w.point.id === anchors[anchors.length - 1].nodeId) : -1;
-  const ahead = ordered.filter(c => t.waypoints.indexOf(c.w) > lastAnchorIdx);
+  const wps = t.waypoints;
+  const lastAnchor = anchors.length ? anchors[anchors.length - 1] : null;
+  const lastIdx = lastAnchor ? wps.findIndex(w => w.point.id === lastAnchor.nodeId) : -1;
 
-  const done = anchors.map(a => {
-    const w = t.waypoints.find(x => x.point.id === a.nodeId);
-    const c = CHECKPOINTS.find(x => x.id === a.nodeId);
-    if (!w || !c) return '';
-    return `<div class="uline"><span class="k">${esc(c.label)}</span>
-      <span class="v num">${fmtClock(a.epoch, tz)}
-        <span style="font-size:11px;color:var(--faint);font-weight:400"> actual · plan ${fmtClock(w.originalEta, tz)}</span></span></div>`;
-  }).join('');
+  // Everything after the last report is still ahead; route order is travel order.
+  const ahead = wps.map((w, i) => ({ w, i })).filter(x => x.i > lastIdx);
+
+  const status = lastAnchor && lastIdx >= 0
+    ? `<div class="cpstatus">ETAs updated at ${esc(wps[lastIdx].point.name)} · ${fmtClock(lastAnchor.epoch, tz)}
+        <span>${anchors.length} update${anchors.length === 1 ? '' : 's'} this transit</span></div>` : '';
 
   if (!ahead.length) {
-    box.innerHTML = `${done}<p style="font-size:12px;color:var(--faint);margin:8px 0 0;line-height:1.5">
-      No checkpoints remaining ahead of the last update.</p>
+    box.innerHTML = `${status}<p style="font-size:12px;color:var(--faint);margin:8px 0 0;line-height:1.5">
+      Nothing remaining ahead of the last report.</p>
       ${anchors.length ? '<button class="btn" id="cpClear" style="margin-top:10px">Clear updates</button>' : ''}`;
     if ($('#cpClear')) $('#cpClear').addEventListener('click', clearAnchors);
     return;
   }
 
-  const sel = CP.pending || ahead[0].id;
-  const now = Date.now();
-  box.innerHTML = `${done}
-    <div class="field" style="margin:${done ? '10px' : '0'} 0 10px">
-      <select class="control" id="cpSel">${ahead.map(c =>
-        `<option value="${c.id}"${c.id === sel ? ' selected' : ''}>${esc(c.label)} · plan ${fmtClock(c.w.eta, tz)}</option>`).join('')}</select>
+  const sel = (CP.pending && ahead.some(x => x.w.point.id === CP.pending))
+    ? CP.pending : ahead[0].w.point.id;
+  const timeVal = CP.time || fmtClock(Date.now(), tz);
+
+  box.innerHTML = `${status}
+    <div class="field" style="margin:${status ? '12px' : '0'} 0 10px">
+      <label for="cpSel">Current position</label>
+      <select class="control" id="cpSel">${ahead.map(x =>
+        `<option value="${x.w.point.id}"${x.w.point.id === sel ? ' selected' : ''}>${esc(x.w.point.name)} · plan ${fmtClock(x.w.eta, tz)}</option>`).join('')}</select>
     </div>
-    <div class="uline"><span class="k">Passing now</span><span class="v num">${fmtClock(now, tz)}</span></div>
-    <p style="font-size:12.5px;color:var(--dim);margin:10px 0 0;line-height:1.5">
-      Update timeline from ${esc((CHECKPOINTS.find(c => c.id === sel) || {}).label)} at ${fmtClock(now, tz)}?</p>
-    <button class="generate" id="cpGo" style="margin-top:10px;padding:15px">Update</button>
+    <div class="field" style="margin-bottom:10px">
+      <label for="cpTime">Current time</label>
+      <input class="control" type="time" id="cpTime" value="${esc(timeVal)}">
+    </div>
+    <button class="generate" id="cpGo" style="padding:15px">Update ETAs</button>
     ${anchors.length ? '<button class="btn" id="cpClear" style="margin-top:8px">Clear updates</button>' : ''}
     <p style="font-size:11.5px;color:var(--faint);margin:8px 0 0;line-height:1.5">
-      Everything ahead is recalculated from this point — ETAs, fog, wind, tide, current,
-      the finish time and the ladder. Points already passed keep their times.</p>`;
+      Everything ahead is re-solved from this point — ETAs, fog, rain, wind, tide,
+      current, the ladder and the finish. Points already passed keep their times.</p>`;
 
   $('#cpSel').addEventListener('change', e => { CP.pending = e.target.value; renderCheckpoints(); });
-  $('#cpGo').addEventListener('click', () => applyCheckpoint($('#cpSel').value));
+  $('#cpTime').addEventListener('change', e => { CP.time = e.target.value; });
+  $('#cpGo').addEventListener('click', () =>
+    applyCheckpoint($('#cpSel').value, $('#cpTime').value));
   if ($('#cpClear')) $('#cpClear').addEventListener('click', clearAnchors);
 }
 
-const CP = { pending: null, busy: false };
+/* A wall-clock time with no date. Resolve it to whichever day puts it closest
+   to the planned ETA at that waypoint, so a transit across midnight lands on
+   the right side of it. */
+function resolveReportTime(hhmm, nearEpoch, tz) {
+  if (!hhmm) return Date.now();
+  const [hh, mm] = hhmm.split(':').map(Number);
+  if (!isFinite(hh)) return Date.now();
+  const parts = {};
+  for (const p of new Intl.DateTimeFormat('en-CA', { timeZone: tz,
+      year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(nearEpoch)))
+    if (p.type !== 'literal') parts[p.type] = p.value;
+  const base = wallToEpoch(+parts.year, +parts.month, +parts.day, hh, mm || 0, tz);
+  const options = [base - 24 * HOUR, base, base + 24 * HOUR];
+  return options.reduce((a, b) =>
+    Math.abs(b - nearEpoch) < Math.abs(a - nearEpoch) ? b : a);
+}
+
+const CP = { pending: null, time: null, busy: false };
 
 async function rebuildWithAnchors(anchors) {
   const saved = Store.get('lastBrief', null);
@@ -6383,26 +6500,28 @@ async function rebuildWithAnchors(anchors) {
     fromId: src.fromId, toId: src.toId, sailEpoch: src.sailEpoch, anchors,
     condition: src.condition === 'LIGHT' ? LIGHT : LOADED,
     speedOverride: parseFloat(src.speedOverride) > 0 ? parseFloat(src.speedOverride) : null,
-    vessel: src.vessel
+    vessel: src.vessel, draftFt: src.draftFt
   });
   renderBrief(LAST);
   // Fog is derived from ETAs, so force it to rebuild against the new timeline.
   FOG.builtFor = null;
 }
 
-async function applyCheckpoint(nodeId) {
+async function applyCheckpoint(nodeId, hhmm) {
   if (CP.busy) return;
   CP.busy = true;
   const btn = $('#cpGo');
   if (btn) { btn.textContent = 'Updating…'; btn.disabled = true; }
   try {
+    const w = LAST.transit.waypoints.find(x => x.point.id === nodeId);
+    const epoch = resolveReportTime(hhmm, w ? w.eta : Date.now(), LAST.tz);
     const anchors = Store.get('anchors', []).filter(a => a.nodeId !== nodeId);
-    anchors.push({ nodeId, epoch: Date.now() });
+    anchors.push({ nodeId, epoch });
     // keep them in the order the ship meets them
     const order = LAST.transit.waypoints.map(w => w.point.id);
     anchors.sort((a, b) => order.indexOf(a.nodeId) - order.indexOf(b.nodeId));
     Store.set('anchors', anchors);
-    CP.pending = null;
+    CP.pending = null; CP.time = null;
     await rebuildWithAnchors(anchors);
   } catch (e) {
     if (btn) { btn.textContent = 'Failed: ' + (e.message || e); btn.disabled = false; }
@@ -6412,7 +6531,7 @@ async function applyCheckpoint(nodeId) {
 
 async function clearAnchors() {
   Store.set('anchors', []);
-  CP.pending = null;
+  CP.pending = null; CP.time = null;
   await rebuildWithAnchors([]);
 }
 
@@ -7025,7 +7144,7 @@ renderPlan();
         fromId: saved.fromId, toId: saved.toId, sailEpoch: saved.sailEpoch,
         condition: saved.condition === 'LIGHT' ? LIGHT : LOADED,
         speedOverride: parseFloat(saved.speedOverride) > 0 ? parseFloat(saved.speedOverride) : null,
-        vessel: saved.vessel
+        vessel: saved.vessel, draftFt: saved.draftFt
       });
       Underway.reset();
       renderBrief(LAST); show('viewBrief');
