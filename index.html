@@ -279,6 +279,35 @@ input.spd:focus{outline:none;border-color:var(--info)}
   color:var(--info);margin-left:7px;vertical-align:2px}
 .stop.done .time,.stop.done .name{opacity:.55}
 .cptag.past{color:var(--faint)}
+.offrow{border-bottom:1px solid var(--line-soft);padding:11px 0}
+.offrow:last-of-type{border-bottom:none}
+.offhead{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.offlbl{font-size:13.5px;font-weight:650}
+.offneed{display:block;font-size:11px;color:var(--faint);font-weight:400;margin-top:1px}
+.offmsg{font-family:var(--mono);font-size:13px;background:var(--deck);border:1px solid var(--line);
+  border-radius:9px;padding:11px 12px;margin-top:9px;line-height:1.45;color:var(--ink)}
+.offready{font-size:9.5px;font-weight:750;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--stbd);margin-top:10px}
+.offbig{display:block;width:100%;margin-top:9px;padding:16px;border:none;border-radius:11px;
+  background:var(--stbd);color:#04150D;font-size:14px;font-weight:750;letter-spacing:.12em;
+  text-transform:uppercase;cursor:pointer}
+.offbig:active{background:#2b8f66}
+.offbig.correction{background:var(--caution);color:#201604}
+.offstate{font-size:11px;color:var(--faint);margin-top:7px;line-height:1.4}
+.offwarn{font-size:12px;color:var(--caution);margin-top:9px;line-height:1.45}
+.offprev{font-family:var(--mono);font-size:11.5px;color:var(--faint)}
+.offpend{font-size:11.5px;color:var(--caution);margin-top:7px}
+.btn.offsend{margin-top:8px;margin-bottom:0}
+.cprep{display:flex;justify-content:space-between;align-items:center;gap:10px;
+  padding:9px 0;border-bottom:1px solid var(--line-soft)}
+.cprep:last-of-type{border-bottom:none}
+.cprepl b{font-size:13.5px;font-weight:650;display:block}
+.cprepl span{font-size:11px;color:var(--faint);display:block;margin-top:1px}
+.btn.cpedit{margin:0;padding:8px 14px;font-size:10px}
+.cpmsg{border:1px solid rgba(230,169,60,.45);background:rgba(230,169,60,.09);
+  color:var(--caution);border-radius:9px;padding:10px 12px;font-size:12.5px;
+  line-height:1.45;margin-bottom:12px}
+.cpmsg.ok{border-color:rgba(53,179,126,.45);background:rgba(53,179,126,.09);color:var(--stbd)}
 .cpstatus{font-size:12.5px;color:var(--info);line-height:1.5;font-weight:600}
 .cpstatus span{display:block;font-size:11px;color:var(--faint);font-weight:400;margin-top:2px}
 .orig{display:block;font-family:var(--sans);font-size:10.5px;font-weight:400;
@@ -366,6 +395,7 @@ textarea.control{min-height:190px;font-family:var(--mono);font-size:12px;line-he
   <button data-tab="viewPlan" class="on">Transit</button>
   <button data-tab="viewTides">Tides</button>
   <button data-tab="viewFog">Fog</button>
+  <button data-tab="viewTrip">Trip</button>
 </nav>
 
 <main class="wrap">
@@ -373,6 +403,7 @@ textarea.control{min-height:190px;font-family:var(--mono);font-size:12px;line-he
   <section class="view" id="viewBrief"></section>
   <section class="view" id="viewTides"></section>
   <section class="view" id="viewFog"></section>
+  <section class="view" id="viewTrip"></section>
   <section class="view" id="viewAdmin"></section>
 </main>
 
@@ -3707,6 +3738,21 @@ function getOffBuoyFor(draftFt) {
   return { undefinedRule: true, draftFt };
 }
 
+/* ---------------------------------------------------------------------------
+   JETTIES CURRENT
+   Current at the jetties is read from one named station — Cameron Fishing Pier
+   — and never blended between gauges or substituted from a neighbour. That is
+   deliberate and differs from the rest of the app, where a position between
+   gauges gets an interpolated value. If this station is unavailable the card
+   says so rather than quietly using another.
+   ------------------------------------------------------------------------- */
+const JETTIES = {
+  nodeId: 'MK_41_42',
+  label: 'Light 41/42 — jetties',
+  gaugeId: 'G_PIER',
+  gaugeLabel: 'Cameron Fishing Pier'
+};
+
 const RAIN_TRACE_MM = 0.5;
 const RAIN_MODERATE_MM = 2.5;
 const RAIN_HEAVY_MM = 7.6;
@@ -4475,6 +4521,315 @@ const isObservedCurrentStation = id => OBSERVED_CURRENT_STATIONS.includes(id);
    inbound and outbound both work without assuming waypoint numbers increase
    with travel. No separate list to fall out of step with the channel data. */
 
+/* =========================================================================
+   PILOT TRIP LOG
+   The digital version of the notebook: actual times only, never an ETA.
+   Separate from the speed Save Log, which records observed speeds and is
+   untouched by any of this.
+
+   Position events reuse existing route nodes. First Line and Last Line are
+   operational events with no geography. CC Buoy is manual for now — the
+   authoritative position has not been supplied, and inventing one would be
+   worse than logging it by hand.
+   ======================================================================= */
+/* First Line, All Fast and Last Line are three distinct operational events and
+   must never share a field. Direction determines which normally apply:
+   inbound is First Line then All Fast; outbound is Last Line. */
+const TRIP_EVENTS = [
+  { key: 'LAST_LINE',  label: 'Last Line',    nodeId: null, manual: true, when: 'OUTBOUND' },
+  { key: 'BR210',      label: 'I-210 Bridge', nodeId: 'BR210' },
+  { key: 'ICW',        label: 'ICW',          nodeId: 'MK_91_92' },
+  { key: 'B60',        label: '60 Buoy',      nodeId: 'MK_60' },
+  { key: 'B36',        label: '36 Buoy',      nodeId: 'MK_35_36' },
+  { key: 'CC',         label: 'CC Buoy',      nodeId: null, pendingPosition: true },
+  { key: 'FIRST_LINE', label: 'First Line',   nodeId: null, manual: true, when: 'INBOUND' },
+  { key: 'ALL_FAST',   label: 'All Fast',     nodeId: null, manual: true, when: 'INBOUND' }
+];
+
+/* =========================================================================
+   OFFICE CHECK-IN MESSAGING
+   Direction-specific reports. Every message opens with the checkpoint and its
+   ACTUAL time — never an ETA, and never the operational detail on its own.
+   Trip numbers are deliberately excluded from office messages.
+
+   Timestamps are shared: a time recorded here is the same one the Trip Log and
+   Updated Position hold. It is entered once.
+   ======================================================================= */
+const OFFICE_INBOUND = [
+  { key: 'CC',         label: 'CC Buoy',       trip: 'CC',         asks: ['draft'] },
+  { key: 'B36',        label: '36 Buoy',       trip: 'B36',        asks: ['draftIfNeeded'] },
+  { key: 'B60',        label: '60 Beacon',     trip: 'B60',        asks: ['tugs'] },
+  { key: 'ICW',        label: 'ICW',           trip: 'ICW',        asks: ['toDock', 'channel'] },
+  { key: 'BR210',      label: 'I-210 Bridge',  trip: 'BR210',      asks: [] },
+  { key: 'ALL_FAST',   label: 'All Fast',      trip: 'ALL_FAST',   asks: [], manual: true }
+];
+
+const OFFICE_OUTBOUND = [
+  { key: 'LAST_LINE',  label: 'Last Line',     trip: 'LAST_LINE',  asks: ['draft'], manual: true },
+  { key: 'ICW',        label: 'ICW',           trip: 'ICW',        asks: ['ride'] },
+  { key: 'B36',        label: '36 Buoy',       trip: 'B36',        asks: [] }
+];
+
+function officeSequence(outbound) { return outbound ? OFFICE_OUTBOUND : OFFICE_INBOUND; }
+
+/* Office messages use HHMM with no separator. */
+function fmtHHMM(epoch, tz) { return fmtClock(epoch, tz || TZ()).replace(':', ''); }
+
+function fmtHrMin(mins) {
+  const m = Math.max(0, Math.round(mins || 0));
+  const h = Math.floor(m / 60), r = m % 60;
+  if (h && r) return `${h} hr ${r} min`;
+  if (h) return `${h} hr`;
+  return `${r} min`;
+}
+
+function tugText(tugs) {
+  if (!tugs || !tugs.count) return null;
+  const t = tugs.types || [];
+  if (tugs.count === 1) return `1 ${t[0] || 'Tractor'} Tug`;
+  if (t[0] && t[1] && t[0] !== t[1]) return `1 ${t[0]} / 1 ${t[1]}`;
+  return `2 ${t[0] || 'Tractor'} Tugs`;
+}
+
+/**
+ * Compose one office message. Returns null where the actual time is missing —
+ * a report is never sent without the time it belongs to.
+ */
+function officeMessage(step, trip, tz) {
+  if (!trip) return null;
+  const stamp = trip.events && trip.events[step.trip];
+  if (!stamp) return null;
+  const parts = [`${step.label} ${fmtHHMM(stamp.epoch, stamp.tz || tz)}`];
+
+  for (const ask of step.asks) {
+    if (ask === 'draft' || ask === 'draftIfNeeded') {
+      if (trip.draftFt != null && trip.draftFt !== '')
+        parts.push(`Draft ${Number(trip.draftFt).toFixed(1)} ft`);
+    } else if (ask === 'tugs') {
+      const tt = tugText(trip.tugs);
+      if (tt) parts.push(tt);
+    } else if (ask === 'toDock') {
+      if (trip.toDockMin) parts.push(`${fmtHrMin(trip.toDockMin)} to dock`);
+    } else if (ask === 'channel') {
+      if (trip.workingCh) parts.push(`Working Ch ${trip.workingCh}`);
+    } else if (ask === 'ride') {
+      if (trip.rideMin) parts.push(`Ride in ${fmtHrMin(trip.rideMin)}`);
+    }
+  }
+  return parts.join(' — ');
+}
+
+/* What a step still needs before it can be sent. */
+function officeMissing(step, trip) {
+  const out = [];
+  if (!trip || !trip.events || !trip.events[step.trip]) out.push('actual time');
+  for (const ask of step.asks) {
+    if (ask === 'draft' && (trip.draftFt == null || trip.draftFt === '')) out.push('draft');
+    if (ask === 'draftIfNeeded' && (trip.draftFt == null || trip.draftFt === '')) out.push('draft');
+    if (ask === 'tugs' && !tugText(trip.tugs)) out.push('tugs');
+    if (ask === 'toDock' && !trip.toDockMin) out.push('time to dock');
+    if (ask === 'channel' && !trip.workingCh) out.push('working channel');
+    if (ask === 'ride' && !trip.rideMin) out.push('ride time');
+  }
+  return out;
+}
+
+/* =========================================================================
+   OFFICE MESSAGE DELIVERY
+   The message text is produced by officeMessage() and is never rebuilt here —
+   this layer only carries the finished string. Swapping in a backend SMS
+   service later means replacing deliver() and nothing else.
+
+   What iOS actually permits:
+     sms: URL   opens Messages with recipient AND body prefilled. The pilot
+                still taps Send; nothing is sent silently.
+     Web Share  shares the text but CANNOT preselect a recipient.
+     Clipboard  last resort.
+   None of the three can confirm a message was actually sent, so the app never
+   claims it was.
+   ======================================================================= */
+const OFFICE_NUMBER_KEY = 'officeNumber';
+
+function officeNumber() { return (Store.get(OFFICE_NUMBER_KEY, '') || '').trim(); }
+
+/** Digits and a leading + only — what the sms: scheme accepts. */
+function normaliseNumber(n) {
+  const s = String(n || '').trim();
+  const plus = s.startsWith('+');
+  const digits = s.replace(/[^\d]/g, '');
+  if (!digits) return '';
+  return (plus ? '+' : '') + digits;
+}
+
+function smsHref(number, body) {
+  // "?&body=" is the form accepted across iOS versions and by Android.
+  return `sms:${normaliseNumber(number)}?&body=${encodeURIComponent(body)}`;
+}
+
+/**
+ * Deliver a finished office message.
+ * @returns one of 'messages' | 'shared' | 'copied' | 'cancelled' | 'failed'
+ * Never returns anything implying the message was sent.
+ */
+async function deliverOfficeMessage(text, opts) {
+  opts = opts || {};
+  const num = opts.number != null ? opts.number : officeNumber();
+
+  if (num) {
+    try {
+      // A user gesture is required; this is only ever called from a tap.
+      window.location.href = smsHref(num, text);
+      return 'messages';
+    } catch (e) { /* fall through */ }
+  }
+  if (navigator.share) {
+    try { await navigator.share({ text }); return 'shared'; }
+    catch (e) { if (e && e.name === 'AbortError') return 'cancelled'; }
+  }
+  try {
+    if (navigator.clipboard) { await navigator.clipboard.writeText(text); return 'copied'; }
+  } catch (e) { /* fall through */ }
+  return 'failed';
+}
+
+/* What was last prepared for a step, so a later edit can be spotted. */
+function officePrepared(trip, key) {
+  return (trip && trip.officeSent && trip.officeSent[key]) || null;
+}
+
+function markOfficePrepared(key, text, how) {
+  const d = tripStore();
+  if (!d.active) return;
+  d.active.officeSent = d.active.officeSent || {};
+  d.active.officeSent[key] = { text, how, at: Date.now() };
+  tripSave(d);
+}
+
+/* not-ready | ready | prepared | changed */
+function officeStatus(step, trip, tz) {
+  const text = officeMessage(step, trip, tz);
+  if (!text) return { state: 'not-ready', text: null };
+  const prev = officePrepared(trip, step.key);
+  if (!prev) return { state: 'ready', text };
+  if (prev.text !== text) return { state: 'changed', text, previous: prev.text, how: prev.how };
+  return { state: 'prepared', text, how: prev.how, at: prev.at };
+}
+
+const TRIP_KEY = 'tripLog';
+
+function tripStore() {
+  const d = Store.get(TRIP_KEY, null);
+  return d && typeof d === 'object'
+    ? { trips: d.trips || [], active: d.active || null, nextNumber: d.nextNumber || null }
+    : { trips: [], active: null, nextNumber: null };
+}
+function tripSave(d) { Store.set(TRIP_KEY, d); }
+
+/* Events in the order the ship meets them. First and Last Line always bracket
+   the passage; the position events follow route order, which reverses on an
+   inbound job. */
+/* Events in the order the ship meets them. Outbound opens with Last Line off
+   the dock; inbound closes with First Line then All Fast alongside. */
+function tripEventOrder(transit) {
+  const byKey = k => TRIP_EVENTS.find(e => e.key === k);
+  const positional = TRIP_EVENTS.filter(e => !e.manual);
+  if (!transit) {
+    // No route context: a stable canonical order covering both directions.
+    return [byKey('LAST_LINE'), byKey('BR210'), byKey('ICW'), byKey('B60'),
+            byKey('B36'), byKey('CC'), byKey('FIRST_LINE'), byKey('ALL_FAST')];
+  }
+  const order = transit.waypoints.map(w => w.point.id);
+  const onRoute = positional.filter(e => e.nodeId && order.includes(e.nodeId));
+  onRoute.sort((a, b) => order.indexOf(a.nodeId) - order.indexOf(b.nodeId));
+  // CC Buoy has no position yet: seaward end of the passage either way.
+  const cc = byKey('CC');
+  if (transit.outbound)
+    return [byKey('LAST_LINE'), ...onRoute, cc];
+  return [cc, ...onRoute, byKey('FIRST_LINE'), byKey('ALL_FAST')];
+}
+
+/* Full timestamp with zone, so a passage across midnight stays in order. */
+function tripStamp(epoch) {
+  return { epoch, iso: new Date(epoch).toISOString(), tz: TZ() };
+}
+
+function tripStartActive(number, ship, transit) {
+  const d = tripStore();
+  const from = transit.waypoints[0].point;
+  const to = transit.waypoints[transit.waypoints.length - 1].point;
+  d.active = {
+    number, ship: ship || '',
+    fromId: from.id, fromName: from.name,
+    toId: to.id, toName: to.name,
+    outbound: transit.outbound,
+    startedAt: Date.now(),
+    events: {}
+  };
+  tripSave(d);
+  return d.active;
+}
+
+function tripSetEvent(key, epoch) {
+  const d = tripStore();
+  if (!d.active) return null;
+  if (epoch == null) delete d.active.events[key];
+  else d.active.events[key] = tripStamp(epoch);
+  tripSave(d);                       // autosave on every change
+  return d.active;
+}
+
+function tripSetField(field, value) {
+  const d = tripStore();
+  if (!d.active) return null;
+  d.active[field] = value;
+  tripSave(d);
+  return d.active;
+}
+
+function tripComplete() {
+  const d = tripStore();
+  if (!d.active) return null;
+  const done = { ...d.active, completedAt: Date.now() };
+  d.trips.unshift(done);
+  d.active = null;
+  // Increment only on completion — never on opening, editing or exporting.
+  d.nextNumber = (parseInt(done.number, 10) || 0) + 1;
+  tripSave(d);
+  return done;
+}
+
+/* An Updated Position report is an actual time. If it lands on a trip-log
+   event, record it there too rather than asking for it twice. */
+function tripSyncFromAnchors(anchors) {
+  const d = tripStore();
+  if (!d.active) return;
+  let touched = false;
+  for (const a of anchors || []) {
+    const ev = TRIP_EVENTS.find(e => e.nodeId && e.nodeId === a.nodeId);
+    if (!ev) continue;
+    const cur = d.active.events[ev.key];
+    if (!cur || cur.epoch !== a.epoch) {
+      d.active.events[ev.key] = tripStamp(a.epoch);
+      touched = true;
+    }
+  }
+  if (touched) tripSave(d);
+}
+
+/* The reverse: editing a trip time for an event that is also an active anchor
+   must move the anchor, so the two cannot disagree. */
+async function tripSyncToAnchor(eventKey, epoch) {
+  const ev = TRIP_EVENTS.find(e => e.key === eventKey);
+  if (!ev || !ev.nodeId || !LAST) return false;
+  const anchors = Store.get('anchors', []);
+  const idx = anchors.findIndex(a => a.nodeId === ev.nodeId);
+  if (idx < 0) return false;
+  anchors[idx] = { nodeId: ev.nodeId, epoch };
+  Store.set('anchors', anchors);
+  await rebuildWithAnchors(anchors);
+  return true;
+}
+
 const CACHE_KEY = 'envCache';
 const CACHE_MAX_ENTRIES = 120;
 const STALE_AFTER = { weather: 6 * HOUR, visibility: 6 * HOUR, wave: 12 * HOUR,
@@ -5188,6 +5543,48 @@ function buildBrief(input) {
       }
     }
 
+    /* Jetties card. Pinned to one station, unblended. */
+    let jetties = null;
+    {
+      const st = stops.find(x => x.point.id === JETTIES.nodeId);
+      if (st) {
+        const pack = env.gaugeData.current[JETTIES.gaugeId];
+        const sample = t => {
+          if (!pack) return null;
+          const sm = sampleSeries(pack.series, t);
+          return sm ? lerpNum(sm.a.signedKts, sm.b ? sm.b.signedKts : null, sm.f) : null;
+        };
+        const atEta = sample(st.eta);
+        let trend = null, nextMax = null;
+        if (atEta != null) {
+          const before = sample(st.eta - 30 * MIN), after = sample(st.eta + 30 * MIN);
+          if (before != null && after != null) {
+            const mag = Math.abs(after) - Math.abs(before);
+            trend = Math.abs(atEta) < 0.1 ? 'slack'
+              : mag > 0.05 ? 'increasing' : mag < -0.05 ? 'decreasing' : 'steady';
+          }
+          /* A genuine turning point, not the largest value in a window — the
+             extreme of a window that opens mid-fall is just its first sample,
+             which is not a maximum of anything. */
+          const rows = pack.series;
+          for (let i = 1; i < rows.length - 1; i++) {
+            if (rows[i].t <= st.eta || rows[i].t > st.eta + 8 * HOUR) continue;
+            const p = rows[i - 1].signedKts, c = rows[i].signedKts, n = rows[i + 1].signedKts;
+            if (p == null || c == null || n == null) continue;
+            if (c > 0 && c >= p && c >= n && c > 0.15) { nextMax = { t: rows[i].t, kts: c, kind: 'Max flood' }; break; }
+            if (c < 0 && c <= p && c <= n && c < -0.15) { nextMax = { t: rows[i].t, kts: c, kind: 'Max ebb' }; break; }
+          }
+        }
+        jetties = {
+          name: st.point.name, eta: st.eta, atEta, trend, nextMax,
+          gauge: JETTIES.gaugeLabel,
+          available: pack != null && atEta != null,
+          reason: !pack ? 'Cameron Fishing Pier predictions unavailable'
+                : atEta == null ? 'No prediction covering this ETA' : null
+        };
+      }
+    }
+
     // --- pilot transfer ---
     const last = stops[stops.length - 1];
     let ladder = null;
@@ -5377,7 +5774,7 @@ function buildBrief(input) {
 
     return { input, transit, stops, env, tideEvents, currentEvents, maxCurrent,
              maxWind, ladder, alerts, tz, thresholds, window, currentAt,
-             fogSummary, fogSplit, liveCurrents, getOff };
+             fogSummary, fogSplit, liveCurrents, getOff, jetties };
   });
 }
 
@@ -5764,6 +6161,20 @@ function renderBrief(b) {
     <p class="eyebrow">What matters</p>
     <div class="grid">
       ${(() => {
+        const j = b.jetties;
+        if (!j) return '';
+        if (!j.available) return `<div class="cell wide"><div class="k">Jetties · ETA ${fmtClock(j.eta, tz)}</div>
+          <div class="v" style="font-size:18px;color:var(--caution)">Current unavailable</div>
+          <div class="s">${esc(j.reason || '')} — no other station substituted.</div></div>`;
+        const cls = Math.abs(j.atEta) < 0.1 ? '' : (j.atEta > 0 ? 'lvl-stbd' : 'lvl-port');
+        return `<div class="cell wide"><div class="k">Jetties · ETA ${fmtClock(j.eta, tz)}</div>
+          <div class="v ${cls}">${describeCur(j.atEta)}</div>
+          <div class="s">${j.trend ? esc(j.trend.charAt(0).toUpperCase() + j.trend.slice(1)) : '—'}${
+            j.nextMax ? ` · ${esc(j.nextMax.kind)} ${Math.abs(j.nextMax.kts).toFixed(1)} kt at ${fmtClock(j.nextMax.t, tz)}` : ''}</div>
+          <div class="s" style="color:var(--faint);margin-top:4px">${esc(j.gauge)} station prediction, unblended</div>
+        </div>`;
+      })()}
+      ${(() => {
         const g = b.getOff;
         if (!g) return '';
         if (g.inbound) return `<div class="cell wide"><div class="k">Vessel draft</div>
@@ -5905,6 +6316,16 @@ function renderBrief(b) {
       Observed is a live sensor reading; predicted is the NOAA harmonic prediction. A
       missing observation is never filled in with a prediction. Differences are reported
       and never used to correct future predictions.</p>
+
+    ${(() => {
+      const d = tripStore();
+      if (!d.active) return '';
+      const logged = Object.keys(d.active.events || {}).length;
+      return `<div class="mockbar" style="border-color:rgba(78,155,209,.4);background:rgba(78,155,209,.08);color:#A9CDE8">
+        <b style="color:var(--info)">Trip ${esc(String(d.active.number))} in progress</b><br>
+        ${d.active.ship && d.active.ship.trim() ? esc(d.active.ship) + ' · ' : ''}${esc(d.active.fromName)} → ${esc(d.active.toName)} ·
+        ${logged} of ${TRIP_EVENTS.length} events logged. Open the Trip tab to record times.</div>`;
+    })()}
 
     <div class="rule"></div>
     <p class="eyebrow">Update ETA</p>
@@ -6061,6 +6482,18 @@ function renderAdmin() {
     </div>
 
     <div class="adminsec">
+      <p class="eyebrow">Office check-in number</p>
+      <div class="field" style="margin-bottom:8px"><label for="aOffice">Number</label>
+        <input class="control" id="aOffice" type="tel" inputmode="tel"
+          value="${esc(officeNumber())}" placeholder="e.g. +1 337 555 0123"></div>
+      <span id="aOfficeMsg" style="font-size:12px;color:var(--dim)"></span>
+      <p style="font-size:12.5px;color:var(--dim);margin:10px 0 0;line-height:1.55">
+        Used to address office check-in messages. Send opens Messages with this number and
+        the report already typed; you still tap Send. iOS does not let an app send a text
+        for you, and gives no way to confirm one was sent.</p>
+    </div>
+
+    <div class="adminsec">
       <p class="eyebrow">Offline</p>
       <table class="data"><tbody>
         <tr><td>Cached datasets</td><td class="n">${Object.keys(Store.get('envCache', {})).length}</td></tr>
@@ -6141,6 +6574,14 @@ function renderAdmin() {
     Store.set('speedOverrides', {});
     applySpeedOverrides();
     renderAdmin();
+  });
+  $('#aOffice').addEventListener('change', e => {
+    const raw = (e.target.value || '').trim();
+    const n = normaliseNumber(raw);
+    if (raw && !n) { $('#aOfficeMsg').textContent = ' Not a usable number.'; return; }
+    Store.set(OFFICE_NUMBER_KEY, n);
+    e.target.value = n;
+    $('#aOfficeMsg').textContent = n ? ' Saved.' : ' Cleared.';
   });
   $('#aClearCache').addEventListener('click', () => {
     Store.set('envCache', {}); $('#aCacheMsg').textContent = ' Cleared.';
@@ -6424,32 +6865,78 @@ function renderCheckpoints() {
   if (!box || !LAST) return;
   const t = LAST.transit, tz = LAST.tz;
   const anchors = Store.get('anchors', []);
-
   const wps = t.waypoints;
-  const lastAnchor = anchors.length ? anchors[anchors.length - 1] : null;
-  const lastIdx = lastAnchor ? wps.findIndex(w => w.point.id === lastAnchor.nodeId) : -1;
+  const order = wps.map(w => w.point.id);
 
-  // Everything after the last report is still ahead; route order is travel order.
+  const msg = CP.message
+    ? `<div class="cpmsg${CP.messageOk ? ' ok' : ''}">${esc(CP.message)}</div>` : '';
+
+  /* ---- editing an existing report ---- */
+  if (CP.editing) {
+    const a = anchors.find(x => x.nodeId === CP.editing);
+    if (!a) { CP.editing = null; renderCheckpoints(); return; }
+    /* Any waypoint may be chosen, including ones behind the current anchor —
+       the whole point is to correct a report entered at the wrong place. */
+    const sel = CP.pending || a.nodeId;
+    const timeVal = CP.time != null ? CP.time : fmtClock(a.epoch, tz);
+    box.innerHTML = `${msg}
+      <p class="eyebrow" style="margin-bottom:10px">Edit report</p>
+      <div class="field" style="margin-bottom:10px"><label for="cpSel">Updated position</label>
+        <select class="control" id="cpSel">${wps.map(w =>
+          `<option value="${w.point.id}"${w.point.id === sel ? ' selected' : ''}>${esc(w.point.name)} · plan ${fmtClock(w.originalEta, tz)}</option>`).join('')}</select></div>
+      <div class="field" style="margin-bottom:12px"><label for="cpTime">Actual time</label>
+        <input class="control" type="time" id="cpTime" value="${esc(timeVal)}"></div>
+      <button class="generate" id="cpSave" style="padding:15px">Save changes</button>
+      <button class="btn" id="cpCancel" style="margin-top:8px">Cancel</button>
+      <p style="font-size:11.5px;color:var(--faint);margin:8px 0 0;line-height:1.5">
+        This replaces the existing report rather than adding another. Saving re-runs the
+        ETAs and everything that depends on them.</p>`;
+    $('#cpSel').addEventListener('change', e => { CP.pending = e.target.value; });
+    $('#cpTime').addEventListener('change', e => { CP.time = e.target.value; });
+    $('#cpCancel').addEventListener('click', () => {
+      CP.editing = null; CP.pending = null; CP.time = null; CP.message = null;
+      renderCheckpoints();
+    });
+    $('#cpSave').addEventListener('click', () =>
+      saveEditedReport(a.nodeId, $('#cpSel').value, $('#cpTime').value));
+    return;
+  }
+
+  /* ---- normal view ---- */
+  const lastAnchor = anchors.length ? anchors[anchors.length - 1] : null;
+  const lastIdx = lastAnchor ? order.indexOf(lastAnchor.nodeId) : -1;
   const ahead = wps.map((w, i) => ({ w, i })).filter(x => x.i > lastIdx);
 
-  const status = lastAnchor && lastIdx >= 0
-    ? `<div class="cpstatus">ETAs updated at ${esc(wps[lastIdx].point.name)} · ${fmtClock(lastAnchor.epoch, tz)}
-        <span>${anchors.length} update${anchors.length === 1 ? '' : 's'} this transit</span></div>` : '';
+  const reports = anchors.map(a => {
+    const w = wps.find(x => x.point.id === a.nodeId);
+    if (!w) return '';
+    const delta = a.epoch - w.originalEta;
+    return `<div class="cprep">
+      <span class="cprepl"><b>${esc(w.point.name)}</b>
+        <span>Actual ${fmtClock(a.epoch, tz)} · plan ${fmtClock(w.originalEta, tz)}${
+          Math.abs(delta) >= 60000 ? ` · ${delta > 0 ? '+' : '−'}${fmtDuration(Math.abs(delta))}` : ''}</span></span>
+      <button class="btn cpedit" data-edit="${esc(a.nodeId)}">Edit</button>
+    </div>`;
+  }).join('');
+
+  const header = anchors.length
+    ? `<p class="eyebrow" style="margin-bottom:8px">Updated position</p>${reports}` : '';
 
   if (!ahead.length) {
-    box.innerHTML = `${status}<p style="font-size:12px;color:var(--faint);margin:8px 0 0;line-height:1.5">
-      Nothing remaining ahead of the last report.</p>
+    box.innerHTML = `${msg}${header}
+      <p style="font-size:12px;color:var(--faint);margin:10px 0 0;line-height:1.5">
+        Nothing remaining ahead of the last report.</p>
       ${anchors.length ? '<button class="btn" id="cpClear" style="margin-top:10px">Clear updates</button>' : ''}`;
-    if ($('#cpClear')) $('#cpClear').addEventListener('click', clearAnchors);
+    bindCheckpointButtons();
     return;
   }
 
   const sel = (CP.pending && ahead.some(x => x.w.point.id === CP.pending))
     ? CP.pending : ahead[0].w.point.id;
-  const timeVal = CP.time || fmtClock(Date.now(), tz);
+  const timeVal = CP.time != null ? CP.time : fmtClock(Date.now(), tz);
 
-  box.innerHTML = `${status}
-    <div class="field" style="margin:${status ? '12px' : '0'} 0 10px">
+  box.innerHTML = `${msg}${header}
+    <div class="field" style="margin:${header ? '14px' : '0'} 0 10px">
       <label for="cpSel">Current position</label>
       <select class="control" id="cpSel">${ahead.map(x =>
         `<option value="${x.w.point.id}"${x.w.point.id === sel ? ' selected' : ''}>${esc(x.w.point.name)} · plan ${fmtClock(x.w.eta, tz)}</option>`).join('')}</select>
@@ -6462,13 +6949,51 @@ function renderCheckpoints() {
     ${anchors.length ? '<button class="btn" id="cpClear" style="margin-top:8px">Clear updates</button>' : ''}
     <p style="font-size:11.5px;color:var(--faint);margin:8px 0 0;line-height:1.5">
       Everything ahead is re-solved from this point — ETAs, fog, rain, wind, tide,
-      current, the ladder and the finish. Points already passed keep their times.</p>`;
+      current, the jetties card and the finish. Points already passed keep their times.</p>`;
+  bindCheckpointButtons();
+}
 
-  $('#cpSel').addEventListener('change', e => { CP.pending = e.target.value; renderCheckpoints(); });
-  $('#cpTime').addEventListener('change', e => { CP.time = e.target.value; });
-  $('#cpGo').addEventListener('click', () =>
+function bindCheckpointButtons() {
+  if ($('#cpSel')) $('#cpSel').addEventListener('change', e => { CP.pending = e.target.value; });
+  if ($('#cpTime')) $('#cpTime').addEventListener('change', e => { CP.time = e.target.value; });
+  if ($('#cpGo')) $('#cpGo').addEventListener('click', () =>
     applyCheckpoint($('#cpSel').value, $('#cpTime').value));
   if ($('#cpClear')) $('#cpClear').addEventListener('click', clearAnchors);
+  document.querySelectorAll('.cpedit').forEach(btn => btn.addEventListener('click', () => {
+    CP.editing = btn.dataset.edit; CP.pending = null; CP.time = null; CP.message = null;
+    renderCheckpoints();
+  }));
+}
+
+/* Replace an existing report. Never adds a second one on top of it, and never
+   changes anything unless the new entry validates. */
+async function saveEditedReport(originalNodeId, nodeId, hhmm) {
+  if (CP.busy) return;
+  const err = validateReport(nodeId, hhmm, LAST.transit, { replacing: originalNodeId, tz: LAST.tz });
+  if (err) { CP.message = err; CP.messageOk = false; renderCheckpoints(); return; }
+
+  CP.busy = true;
+  const btn = $('#cpSave');
+  if (btn) { btn.textContent = 'Saving…'; btn.disabled = true; }
+  try {
+    const w = LAST.transit.waypoints.find(x => x.point.id === nodeId);
+    const epoch = resolveReportTime(hhmm, w.originalEta, LAST.tz);
+    const anchors = Store.get('anchors', [])
+      .filter(a => a.nodeId !== originalNodeId && a.nodeId !== nodeId);
+    anchors.push({ nodeId, epoch });
+    const order = LAST.transit.waypoints.map(x => x.point.id);
+    anchors.sort((a, b) => order.indexOf(a.nodeId) - order.indexOf(b.nodeId));
+    Store.set('anchors', anchors);
+    tripSyncFromAnchors(anchors);
+    CP.editing = null; CP.pending = null; CP.time = null;
+    CP.message = 'Updated position corrected'; CP.messageOk = true;
+    await rebuildWithAnchors(anchors);
+    setTimeout(() => { CP.message = null; renderCheckpoints(); }, 4000);
+  } catch (e) {
+    CP.message = 'Could not save: ' + (e.message || e); CP.messageOk = false;
+    renderCheckpoints();
+  }
+  CP.busy = false;
 }
 
 /* A wall-clock time with no date. Resolve it to whichever day puts it closest
@@ -6488,7 +7013,37 @@ function resolveReportTime(hhmm, nearEpoch, tz) {
     Math.abs(b - nearEpoch) < Math.abs(a - nearEpoch) ? b : a);
 }
 
-const CP = { pending: null, time: null, busy: false };
+const CP = { pending: null, time: null, busy: false,
+             editing: null, message: null };
+
+/* Validate a proposed report before it is allowed to change anything. An
+   invalid entry must leave the transit exactly as it was. */
+function validateReport(nodeId, hhmm, transit, opts) {
+  opts = opts || {};
+  if (!nodeId) return 'Choose a position.';
+  const idx = transit.waypoints.findIndex(w => w.point.id === nodeId);
+  if (idx < 0) return 'That position is not on this route.';
+  if (!hhmm || !/^\d{1,2}:\d{2}$/.test(hhmm)) return 'Enter a time as HH:MM.';
+  const [hh, mm] = hhmm.split(':').map(Number);
+  if (!isFinite(hh) || !isFinite(mm) || hh < 0 || hh > 23 || mm < 0 || mm > 59)
+    return 'That is not a valid clock time.';
+
+  /* Reports must stay in the order the ship meets them. When editing, the
+     entry being replaced is excluded from the comparison. */
+  const others = (Store.get('anchors', []) || [])
+    .filter(a => a.nodeId !== (opts.replacing || null) && a.nodeId !== nodeId);
+  const order = transit.waypoints.map(w => w.point.id);
+  const epoch = resolveReportTime(hhmm, transit.waypoints[idx].eta, opts.tz || TZ());
+  for (const a of others) {
+    const ai = order.indexOf(a.nodeId);
+    if (ai < 0) continue;
+    if (ai < idx && a.epoch >= epoch)
+      return `That is earlier than the report already made at ${pointById(a.nodeId).name}.`;
+    if (ai > idx && a.epoch <= epoch)
+      return `That is later than the report already made at ${pointById(a.nodeId).name}.`;
+  }
+  return null;
+}
 
 async function rebuildWithAnchors(anchors) {
   const saved = Store.get('lastBrief', null);
@@ -6509,6 +7064,8 @@ async function rebuildWithAnchors(anchors) {
 
 async function applyCheckpoint(nodeId, hhmm) {
   if (CP.busy) return;
+  const err = validateReport(nodeId, hhmm, LAST.transit, { tz: LAST.tz });
+  if (err) { CP.message = err; CP.messageOk = false; renderCheckpoints(); return; }
   CP.busy = true;
   const btn = $('#cpGo');
   if (btn) { btn.textContent = 'Updating…'; btn.disabled = true; }
@@ -6521,10 +7078,12 @@ async function applyCheckpoint(nodeId, hhmm) {
     const order = LAST.transit.waypoints.map(w => w.point.id);
     anchors.sort((a, b) => order.indexOf(a.nodeId) - order.indexOf(b.nodeId));
     Store.set('anchors', anchors);
-    CP.pending = null; CP.time = null;
+    tripSyncFromAnchors(anchors);      // an actual time, so the log takes it too
+    CP.pending = null; CP.time = null; CP.message = null;
     await rebuildWithAnchors(anchors);
   } catch (e) {
-    if (btn) { btn.textContent = 'Failed: ' + (e.message || e); btn.disabled = false; }
+    CP.message = 'Could not update: ' + (e.message || e); CP.messageOk = false;
+    renderCheckpoints();
   }
   CP.busy = false;
 }
@@ -6831,7 +7390,8 @@ async function renderTides() {
       ${pack ? `Source: ${esc(pack.source)} · retrieved ${fmtClock(pack.retrieved, TZ())}
         <span class="badge ${pack.quality === 'MOCK' ? 'mock' : pack.quality === 'CACHED' ? 'stale' : 'gap'}">${esc(pack.quality)}</span>`
         : '<span class="badge stale">DATA UNAVAILABLE</span>'}<br>
-      All times ${esc(TZ().split('/')[1].replace('_', ' '))} local.
+      All times ${esc(TZ().split('/')[1].replace('_', ' '))} local.<br>
+      ${kind === 'current' ? `Current source for the jetties card: ${esc(JETTIES.gaugeLabel)} — NOAA.` : ''}
     </div>
 
     ${pack ? tcGraph(pack, win, kind === 'tide' ? 'heightFt' : 'signedKts',
@@ -7092,6 +7652,507 @@ async function renderFog() {
   }));
 }
 
+/* ---------------------------------------------------------------------------
+   TRIP LOG: EXPORT
+   The record must survive outside the app. Text for reading, CSV for keeping.
+   ------------------------------------------------------------------------- */
+function tripDateLine(trip) {
+  const stamps = Object.values(trip.events || {}).map(e => e.epoch).filter(Boolean);
+  const when = stamps.length ? Math.min(...stamps) : (trip.completedAt || trip.startedAt);
+  // A trip with nothing timestamped yet must still export, not throw.
+  if (!isFinite(when)) return '';
+  return new Intl.DateTimeFormat('en-US', { timeZone: TZ(),
+    month: 'long', day: 'numeric', year: 'numeric' }).format(new Date(when));
+}
+
+function tripToText(trip) {
+  const lines = ['PILOT TRIP LOG', '', `Trip: ${trip.number}`];
+  // Ship omitted entirely when blank — never "N/A".
+  if (trip.ship && trip.ship.trim()) lines.push(`Ship: ${trip.ship.trim()}`);
+  lines.push(`Date: ${tripDateLine(trip)}`);
+  lines.push(`From: ${trip.fromName}`);
+  lines.push(`To: ${trip.toName}`);
+  lines.push('');
+  for (const ev of tripEventOrder(null)) {
+    const e = trip.events[ev.key];
+    lines.push(`${ev.label}: ${e ? fmtClock(e.epoch, e.tz || TZ()) : 'Not logged'}`);
+  }
+  return lines.join('\n');
+}
+
+function tripsToCsv(trips) {
+  const cols = ['Trip Number', 'Ship Name', 'Date', 'From', 'To',
+    ...tripEventOrder(null).map(e => e.label)];
+  const esc = v => {
+    const s = v == null ? '' : String(v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const rows = [cols.join(',')];
+  for (const t of trips) {
+    const r = [t.number, (t.ship || '').trim(), tripDateLine(t), t.fromName, t.toName];
+    for (const ev of tripEventOrder(null)) {
+      const e = t.events[ev.key];
+      r.push(e ? fmtClock(e.epoch, e.tz || TZ()) : '');
+    }
+    rows.push(r.map(esc).join(','));
+  }
+  return rows.join('\n');
+}
+
+/* iOS cannot be written to directly from a browser. The system share sheet is
+   the supported route to Notes, Files, Mail and the rest; a download is the
+   fallback where sharing is unavailable. */
+async function shareText(filename, mime, text) {
+  try {
+    const file = new File([text], filename, { type: mime });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: filename });
+      return 'shared';
+    }
+    if (navigator.share) { await navigator.share({ title: filename, text }); return 'shared'; }
+  } catch (e) {
+    if (e && e.name === 'AbortError') return 'cancelled';
+  }
+  try {
+    const url = URL.createObjectURL(new Blob([text], { type: mime }));
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    return 'downloaded';
+  } catch (e) { return 'failed'; }
+}
+
+/* ---------------------------------------------------------------------------
+   TRIP LOG: VIEW
+   ------------------------------------------------------------------------- */
+const TRIPUI = { editing: null, editTime: null, msg: null, msgOk: false, reviewing: false, open: null };
+
+function tripTimeInput(epoch) {
+  return epoch ? fmtClock(epoch, TZ()) : fmtClock(Date.now(), TZ());
+}
+
+function renderTrip() {
+  const host = $('#viewTrip');
+  const d = tripStore();
+  const msg = (TRIPUI.msg || OFFICEUI.msg)
+    ? `<div class="cpmsg${(TRIPUI.msg ? TRIPUI.msgOk : OFFICEUI.msgOk) ? ' ok' : ''}">${esc(TRIPUI.msg || OFFICEUI.msg)}</div>` : '';
+
+  /* ---- viewing one completed trip ---- */
+  if (TRIPUI.open) {
+    const t = d.trips.find(x => String(x.number) === String(TRIPUI.open));
+    if (!t) { TRIPUI.open = null; renderTrip(); return; }
+    host.innerHTML = `${msg}
+      <button class="backbtn" id="trBack">← Trip log</button>
+      <p class="eyebrow">Trip ${esc(String(t.number))}</p>
+      <div class="uw">
+        ${t.ship && t.ship.trim() ? `<div class="uline"><span class="k">Ship</span><span class="v">${esc(t.ship)}</span></div>` : ''}
+        <div class="uline"><span class="k">Date</span><span class="v">${esc(tripDateLine(t))}</span></div>
+        <div class="uline"><span class="k">From</span><span class="v">${esc(t.fromName)}</span></div>
+        <div class="uline"><span class="k">To</span><span class="v">${esc(t.toName)}</span></div>
+      </div>
+      <div class="rule"></div>
+      ${tripEventOrder(null).map(ev => {
+        const e = t.events[ev.key];
+        return `<div class="cprep"><span class="cprepl"><b>${esc(ev.label)}</b>
+          <span>${e ? fmtClock(e.epoch, e.tz || TZ()) : 'Not logged'}</span></span></div>`;
+      }).join('')}
+      <div class="rule"></div>
+      <button class="btn" id="trShare">Save / share trip log</button>
+      <div class="foot">Times shown are actual recorded times, not ETAs.</div>`;
+    $('#trBack').addEventListener('click', () => { TRIPUI.open = null; TRIPUI.msg = null; renderTrip(); });
+    $('#trShare').addEventListener('click', async () => {
+      const r = await shareText(`trip-${t.number}.txt`, 'text/plain', tripToText(t));
+      TRIPUI.msg = r === 'shared' ? 'Shared.' : r === 'downloaded' ? 'Saved to your downloads.'
+        : r === 'cancelled' ? null : 'Could not share.';
+      TRIPUI.msgOk = r === 'shared' || r === 'downloaded';
+      renderTrip();
+    });
+    return;
+  }
+
+  const a = d.active;
+
+  /* ---- no active trip ---- */
+  if (!a) {
+    const suggested = d.nextNumber != null ? d.nextNumber : '';
+    const canStart = !!LAST;
+    host.innerHTML = `${msg}
+      <p class="eyebrow">Start a trip</p>
+      ${canStart ? `<div class="uw">
+        <div class="field" style="margin-bottom:10px"><label for="trNum">Trip number</label>
+          <input class="control" id="trNum" inputmode="numeric" value="${esc(String(suggested))}"
+            placeholder="${d.nextNumber == null ? 'e.g. 428' : ''}"></div>
+        <div class="field" style="margin-bottom:12px"><label for="trShip">Ship name — optional</label>
+          <input class="control" id="trShip" placeholder="Leave blank if not needed"></div>
+        <div class="uline"><span class="k">From</span><span class="v">${esc(LAST.transit.waypoints[0].point.name)}</span></div>
+        <div class="uline"><span class="k">To</span><span class="v">${esc(LAST.transit.waypoints[LAST.transit.waypoints.length-1].point.name)}</span></div>
+        <button class="generate" id="trStart" style="margin-top:12px;padding:15px">Start trip log</button>
+        <p style="font-size:11.5px;color:var(--faint);margin:8px 0 0;line-height:1.5">
+          From and To come from the transit you generated. The trip number only advances
+          when a trip is completed.</p>
+      </div>` : `<div class="mockbar"><b>No transit</b><br>Generate a transit brief first —
+        the trip takes its From and To from it.</div>`}
+      ${tripHistoryHtml(d)}`;
+    if (canStart) $('#trStart').addEventListener('click', () => {
+      const num = ($('#trNum').value || '').trim();
+      if (!num || !/^\d+$/.test(num)) {
+        TRIPUI.msg = 'Enter a trip number.'; TRIPUI.msgOk = false; renderTrip(); return;
+      }
+      tripStartActive(num, $('#trShip').value, LAST.transit);
+      tripSyncFromAnchors(Store.get('anchors', []));
+      TRIPUI.msg = null; renderTrip();
+    });
+    bindTripHistory();
+    return;
+  }
+
+  /* ---- review before completing ---- */
+  if (TRIPUI.reviewing) {
+    host.innerHTML = `${msg}
+      <p class="eyebrow">Review before completing</p>
+      <div class="uw">
+        <div class="uline"><span class="k">Trip</span><span class="v">${esc(String(a.number))}</span></div>
+        ${a.ship && a.ship.trim() ? `<div class="uline"><span class="k">Ship</span><span class="v">${esc(a.ship)}</span></div>` : ''}
+        <div class="uline"><span class="k">From</span><span class="v">${esc(a.fromName)}</span></div>
+        <div class="uline"><span class="k">To</span><span class="v">${esc(a.toName)}</span></div>
+      </div>
+      <div class="rule"></div>
+      ${tripEventOrder(LAST ? LAST.transit : null).map(ev => {
+        const e = a.events[ev.key];
+        return `<div class="cprep"><span class="cprepl"><b>${esc(ev.label)}</b>
+          <span style="${e ? '' : 'color:var(--caution)'}">${e ? fmtClock(e.epoch, e.tz || TZ()) : 'Not logged'}</span></span></div>`;
+      }).join('')}
+      <div class="rule"></div>
+      <button class="generate" id="trDone" style="padding:15px">Complete &amp; save trip</button>
+      <button class="btn" id="trBackEdit" style="margin-top:8px">Back</button>
+      <p style="font-size:11.5px;color:var(--faint);margin:8px 0 0;line-height:1.5">
+        Missing times are left as “Not logged” rather than filled in. Completing this trip
+        sets the next trip number to ${(parseInt(a.number,10)||0)+1}.</p>`;
+    $('#trBackEdit').addEventListener('click', () => { TRIPUI.reviewing = false; renderTrip(); });
+    $('#trDone').addEventListener('click', () => {
+      const done = tripComplete();
+      TRIPUI.reviewing = false;
+      TRIPUI.msg = `Trip ${done.number} saved.`; TRIPUI.msgOk = true;
+      TRIPUI.open = String(done.number);
+      renderTrip();
+    });
+    return;
+  }
+
+  /* ---- current trip ---- */
+  const events = tripEventOrder(LAST ? LAST.transit : null).map(ev => {
+    const e = a.events[ev.key];
+    if (TRIPUI.editing === ev.key) {
+      return `<div class="uw" style="margin:8px 0">
+        <div class="field" style="margin-bottom:10px"><label for="trT">${esc(ev.label)} — actual time</label>
+          <input class="control" type="time" id="trT" value="${esc(TRIPUI.editTime != null ? TRIPUI.editTime : tripTimeInput(e && e.epoch))}"></div>
+        <button class="generate" id="trSaveT" style="padding:13px">Save</button>
+        <button class="btn" id="trCancelT" style="margin-top:8px">Cancel</button>
+      </div>`;
+    }
+    return `<div class="cprep">
+      <span class="cprepl"><b>${e ? '✓ ' : '○ '}${esc(ev.label)}</b>
+        <span>${e ? fmtClock(e.epoch, e.tz || TZ()) : 'Not logged'}${
+          ev.pendingPosition ? ' · manual, position not yet defined' : ''}</span></span>
+      ${e ? `<button class="btn cpedit" data-tedit="${ev.key}">Edit</button>`
+          : `<button class="btn" data-tlog="${ev.key}">Log now</button>`}
+    </div>`;
+  }).join('');
+
+  host.innerHTML = `${msg}
+    <p class="eyebrow">Current trip — ${esc(String(a.number))}</p>
+    <div class="uw">
+      <div class="field" style="margin-bottom:10px"><label for="trShip2">Ship name — optional</label>
+        <input class="control" id="trShip2" value="${esc(a.ship || '')}" placeholder="Leave blank if not needed"></div>
+      <div class="field" style="margin-bottom:4px"><label for="trNum2">Trip number</label>
+        <input class="control" id="trNum2" inputmode="numeric" value="${esc(String(a.number))}"></div>
+      <div class="uline"><span class="k">Route</span><span class="v">${esc(a.fromName)} → ${esc(a.toName)}</span></div>
+    </div>
+    <div class="rule"></div>
+    <p class="eyebrow">Events</p>
+    ${events}
+    <div class="rule"></div>
+    <button class="generate" id="trReview" style="padding:15px">Complete &amp; save trip</button>
+    <button class="btn" id="trDiscard" style="margin-top:8px">Discard trip</button>
+    <p style="font-size:11.5px;color:var(--faint);margin:8px 0 0;line-height:1.5">
+      Actual times only — never an ETA. Everything is saved as you enter it. Times entered
+      through Update ETA appear here automatically.</p>
+    ${officeHtml(a, TZ())}
+    ${tripHistoryHtml(d)}`;
+
+  $('#trShip2').addEventListener('change', e => { tripSetField('ship', e.target.value); });
+  $('#trNum2').addEventListener('change', e => {
+    const v = (e.target.value || '').trim();
+    if (/^\d+$/.test(v)) tripSetField('number', v);
+    else { TRIPUI.msg = 'Trip number must be a number.'; TRIPUI.msgOk = false; renderTrip(); }
+  });
+  document.querySelectorAll('[data-tlog]').forEach(b => b.addEventListener('click', async () => {
+    const key = b.dataset.tlog;
+    tripSetEvent(key, Date.now());
+    await tripSyncToAnchor(key, Date.now());
+    TRIPUI.msg = null; renderTrip();
+  }));
+  document.querySelectorAll('[data-tedit]').forEach(b => b.addEventListener('click', () => {
+    TRIPUI.editing = b.dataset.tedit; TRIPUI.editTime = null; TRIPUI.msg = null; renderTrip();
+  }));
+  if ($('#trCancelT')) $('#trCancelT').addEventListener('click', () => {
+    TRIPUI.editing = null; TRIPUI.editTime = null; renderTrip();
+  });
+  if ($('#trSaveT')) $('#trSaveT').addEventListener('click', async () => {
+    const v = $('#trT').value;
+    if (!v || !/^\d{1,2}:\d{2}$/.test(v)) {
+      TRIPUI.msg = 'Enter a time as HH:MM.'; TRIPUI.msgOk = false; renderTrip(); return;
+    }
+    const key = TRIPUI.editing;
+    const existing = a.events[key];
+    const near = existing ? existing.epoch : Date.now();
+    const epoch = resolveReportTime(v, near, TZ());
+    tripSetEvent(key, epoch);
+    await tripSyncToAnchor(key, epoch);
+    TRIPUI.editing = null; TRIPUI.editTime = null;
+    TRIPUI.msg = 'Time updated.'; TRIPUI.msgOk = true;
+    renderTrip();
+  });
+  bindOffice(!!a.outbound);
+  $('#trReview').addEventListener('click', () => { TRIPUI.reviewing = true; TRIPUI.msg = null; renderTrip(); });
+  $('#trDiscard').addEventListener('click', () => {
+    const dd = tripStore(); dd.active = null; tripSave(dd);
+    TRIPUI.msg = 'Trip discarded.'; TRIPUI.msgOk = false; renderTrip();
+  });
+  bindTripHistory();
+}
+
+/* ---------------------------------------------------------------------------
+   OFFICE CHECK-INS: VIEW
+   ------------------------------------------------------------------------- */
+const OFFICEUI = { asking: null, msg: null, msgOk: false };
+
+function officeHtml(a, tz) {
+  const outbound = !!a.outbound;
+  const seq = officeSequence(outbound);
+  const rows = seq.map(step => {
+    const stamp = a.events[step.trip];
+    const missing = officeMissing(step, a);
+    const msg = officeMessage(step, a, tz);
+    const need = step.asks.map(x => ({
+      draft: 'Draft', draftIfNeeded: 'Draft if needed', tugs: 'Tugs',
+      toDock: 'Time to dock', channel: 'Working channel', ride: 'Ride time'
+    })[x]).filter(Boolean);
+
+    if (OFFICEUI.asking === step.key) return officeFormHtml(step, a, tz);
+
+    const st = officeStatus(step, a, tz);
+    const howLabel = { messages: 'Messages opened', shared: 'Share opened', copied: 'Copied' };
+    let body;
+    if (st.state === 'not-ready') {
+      body = `<div class="offpend">Needs ${esc(missing.join(', '))}</div>`;
+    } else if (st.state === 'changed') {
+      body = `<div class="offwarn">Office report already prepared with previous information:<br>
+          <span class="offprev">${esc(st.previous)}</span></div>
+        <div class="offmsg" data-msgfor="${step.key}">CORRECTION — ${esc(st.text)}</div>
+        <button class="offbig correction" data-send="${step.key}" data-correction="1">Send correction</button>`;
+    } else if (st.state === 'prepared') {
+      body = `<div class="offmsg" data-msgfor="${step.key}">${esc(st.text)}</div>
+        <div class="offstate">${esc(howLabel[st.how] || 'Prepared')} ${fmtClock(st.at, tz)} —
+          the app cannot confirm it was sent</div>
+        <button class="btn offsend" data-send="${step.key}">Open again</button>`;
+    } else {
+      body = `<div class="offready">Ready for office</div>
+        <div class="offmsg" data-msgfor="${step.key}">${esc(st.text)}</div>
+        <button class="offbig" data-send="${step.key}">Send message</button>`;
+    }
+
+    return `<div class="offrow">
+      <div class="offhead">
+        <span class="offlbl">${stamp ? '✓' : '○'} ${esc(step.label)}${
+          need.length ? ` <span class="offneed">Time + ${esc(need.join(' + '))}</span>` : ' <span class="offneed">Time</span>'}</span>
+        <button class="btn" data-off="${step.key}">${stamp ? 'Edit' : 'Log now'}</button>
+      </div>
+      ${body}
+    </div>`;
+  }).join('');
+
+  return `<div class="rule"></div>
+    <p class="eyebrow">Office check-ins — ${outbound ? 'outbound' : 'inbound'}</p>
+    ${rows}
+    <p style="font-size:11.5px;color:var(--faint);margin:10px 0 0;line-height:1.5">
+      Every message opens with the checkpoint and its actual time. Times entered here are
+      the same ones held by the Trip Log and Update ETA. Trip numbers are not included in
+      office messages.<br><br>
+      ${officeNumber()
+        ? `Send opens Messages addressed to ${esc(officeNumber())} with the report already typed. You still tap Send — iOS does not allow an app to send it for you, and the app cannot tell whether you did.`
+        : `No office number set. Add one in Setup and Send will open Messages addressed to it; without it, sharing cannot preselect a recipient.`}</p>`;
+}
+
+function officeFormHtml(step, a, tz) {
+  const stamp = a.events[step.trip];
+  const timeVal = OFFICEUI.time != null ? OFFICEUI.time : (stamp ? fmtClock(stamp.epoch, tz) : fmtClock(Date.now(), tz));
+  const f = [];
+  f.push(`<div class="field" style="margin-bottom:10px"><label for="offT">${esc(step.label)} — actual time</label>
+    <input class="control" type="time" id="offT" value="${esc(timeVal)}"></div>`);
+  for (const ask of step.asks) {
+    if (ask === 'draft' || ask === 'draftIfNeeded')
+      f.push(`<div class="field" style="margin-bottom:10px"><label for="offDraft">Draft (ft)${ask === 'draftIfNeeded' ? ' — if not already reported' : ''}</label>
+        <input class="control" id="offDraft" inputmode="decimal" value="${esc(a.draftFt != null ? String(a.draftFt) : '')}" placeholder="e.g. 38.5"></div>`);
+    if (ask === 'tugs') {
+      const tg = a.tugs || {};
+      const ty = tg.types || [];
+      f.push(`<div class="field" style="margin-bottom:8px"><label>Number of tugs</label>
+        <div class="seg" id="offCount">
+          <button type="button" data-c="1"${tg.count === 1 ? ' class="on"' : ''}>1</button>
+          <button type="button" data-c="2"${tg.count !== 1 ? ' class="on"' : ''}>2</button>
+        </div></div>
+        <div class="field" style="margin-bottom:8px"><label>Tug 1</label>
+          <div class="seg" id="offT1">
+            <button type="button" data-t="Tractor"${(ty[0] || 'Tractor') === 'Tractor' ? ' class="on"' : ''}>Tractor</button>
+            <button type="button" data-t="Conventional"${ty[0] === 'Conventional' ? ' class="on"' : ''}>Conventional</button>
+          </div></div>
+        <div class="field" style="margin-bottom:10px" id="offT2Wrap"><label>Tug 2</label>
+          <div class="seg" id="offT2">
+            <button type="button" data-t="Tractor"${(ty[1] || 'Tractor') === 'Tractor' ? ' class="on"' : ''}>Tractor</button>
+            <button type="button" data-t="Conventional"${ty[1] === 'Conventional' ? ' class="on"' : ''}>Conventional</button>
+          </div></div>`);
+    }
+    if (ask === 'toDock' || ask === 'ride') {
+      const cur = ask === 'toDock' ? a.toDockMin : a.rideMin;
+      const h = cur ? Math.floor(cur / 60) : '', m = cur ? cur % 60 : '';
+      f.push(`<div class="field" style="margin-bottom:10px">
+        <label>${ask === 'toDock' ? 'Time to dock' : 'Ride in'}</label>
+        <div class="row2">
+          <input class="control" id="offH" inputmode="numeric" value="${esc(String(h))}" placeholder="hr">
+          <input class="control" id="offM" inputmode="numeric" value="${esc(String(m))}" placeholder="min">
+        </div></div>`);
+    }
+    if (ask === 'channel')
+      f.push(`<div class="field" style="margin-bottom:10px"><label for="offCh">Working channel</label>
+        <input class="control" id="offCh" inputmode="numeric" value="${esc(a.workingCh || '')}" placeholder="e.g. 12"></div>`);
+  }
+  return `<div class="uw" style="margin:8px 0">
+    ${f.join('')}
+    <button class="generate" id="offSave" style="padding:13px">Save</button>
+    <button class="btn" id="offCancel" style="margin-top:8px">Cancel</button>
+  </div>`;
+}
+
+async function officeSave(stepKey, outbound) {
+  const step = officeSequence(outbound).find(s => s.key === stepKey);
+  if (!step) return;
+  const a = tripStore().active;
+  const v = $('#offT') ? $('#offT').value : null;
+  if (!v || !/^\d{1,2}:\d{2}$/.test(v)) {
+    OFFICEUI.msg = 'Enter the actual time as HH:MM.'; OFFICEUI.msgOk = false; renderTrip(); return;
+  }
+  const existing = a.events[step.trip];
+  const epoch = resolveReportTime(v, existing ? existing.epoch : Date.now(), TZ());
+
+  if ($('#offDraft')) {
+    const d = parseFloat($('#offDraft').value);
+    if ($('#offDraft').value.trim() !== '' && (!isFinite(d) || d <= 0)) {
+      OFFICEUI.msg = 'Draft must be a number in feet.'; OFFICEUI.msgOk = false; renderTrip(); return;
+    }
+    if (isFinite(d) && d > 0) tripSetField('draftFt', d);
+  }
+  if ($('#offCh')) {
+    const c = ($('#offCh').value || '').trim();
+    if (c) tripSetField('workingCh', c);
+  }
+  if ($('#offH') || $('#offM')) {
+    const hh = parseInt(($('#offH') && $('#offH').value) || '0', 10) || 0;
+    const mm = parseInt(($('#offM') && $('#offM').value) || '0', 10) || 0;
+    const total = hh * 60 + mm;
+    if (total > 0) tripSetField(step.asks.includes('ride') ? 'rideMin' : 'toDockMin', total);
+  }
+  if ($('#offCount')) {
+    const count = +(document.querySelector('#offCount .on') || { dataset: { c: 2 } }).dataset.c;
+    const t1 = (document.querySelector('#offT1 .on') || { dataset: { t: 'Tractor' } }).dataset.t;
+    const t2 = (document.querySelector('#offT2 .on') || { dataset: { t: 'Tractor' } }).dataset.t;
+    tripSetField('tugs', { count, types: count === 1 ? [t1] : [t1, t2] });
+  }
+
+  tripSetEvent(step.trip, epoch);
+  await tripSyncToAnchor(step.trip, epoch);
+  OFFICEUI.asking = null; OFFICEUI.time = null;
+  OFFICEUI.msg = 'Saved.'; OFFICEUI.msgOk = true;
+  renderTrip();
+}
+
+function bindOffice(outbound) {
+  document.querySelectorAll('[data-off]').forEach(b => b.addEventListener('click', () => {
+    OFFICEUI.asking = b.dataset.off; OFFICEUI.time = null; OFFICEUI.msg = null; renderTrip();
+  }));
+  if ($('#offCancel')) $('#offCancel').addEventListener('click', () => {
+    OFFICEUI.asking = null; OFFICEUI.time = null; renderTrip();
+  });
+  if ($('#offSave')) $('#offSave').addEventListener('click', () => officeSave(OFFICEUI.asking, outbound));
+  for (const id of ['#offCount', '#offT1', '#offT2']) {
+    const box = document.querySelector(id);
+    if (!box) continue;
+    box.querySelectorAll('button').forEach(btn => btn.addEventListener('click', () => {
+      box.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === btn));
+      if (id === '#offCount') {
+        const two = btn.dataset.c === '2';
+        const wrap = document.querySelector('#offT2Wrap');
+        if (wrap) wrap.style.display = two ? '' : 'none';
+      }
+    }));
+  }
+  /* Sending only ever happens from a tap. Nothing here runs on render, so
+     reopening the app or re-rendering the tab cannot reopen Messages. */
+  document.querySelectorAll('[data-send]').forEach(b => b.addEventListener('click', async () => {
+    const key = b.dataset.send;
+    const step = officeSequence(outbound).find(s => s.key === key);
+    const a = tripStore().active;
+    if (!step || !a) return;
+    // The text comes from the office layer, never from the DOM or rebuilt here.
+    const text = officeMessage(step, a, TZ());
+    if (!text) { OFFICEUI.msg = 'That report is not ready yet.'; OFFICEUI.msgOk = false; renderTrip(); return; }
+    const payload = b.dataset.correction ? `CORRECTION — ${text}` : text;
+    const how = await deliverOfficeMessage(payload);
+    if (how === 'cancelled') { renderTrip(); return; }
+    if (how === 'failed') {
+      OFFICEUI.msg = 'Could not open Messages or share. Set an office number in Setup.';
+      OFFICEUI.msgOk = false; renderTrip(); return;
+    }
+    markOfficePrepared(key, text, how);
+    OFFICEUI.msg = how === 'messages' ? 'Messages opened — tap Send there.'
+      : how === 'shared' ? 'Share opened — the office is not preselected.'
+      : 'Copied — paste it into Messages.';
+    OFFICEUI.msgOk = true;
+    renderTrip();
+  }));
+}
+
+function tripHistoryHtml(d) {
+  if (!d.trips.length) return `<div class="rule"></div><p class="eyebrow">Trip log</p>
+    <p class="gapnote">No completed trips yet.</p>`;
+  return `<div class="rule"></div>
+    <p class="eyebrow">Trip log</p>
+    ${d.trips.slice(0, 40).map(t => `<div class="cprep">
+      <span class="cprepl"><b>Trip ${esc(String(t.number))}</b>
+        <span>${t.ship && t.ship.trim() ? esc(t.ship) + ' · ' : ''}${esc(t.fromName)} → ${esc(t.toName)} · ${esc(tripDateLine(t))}</span></span>
+      <button class="btn" data-topen="${esc(String(t.number))}">Open</button>
+    </div>`).join('')}
+    <button class="btn" id="trExportAll" style="margin-top:12px">Export all trips (CSV)</button>
+    <p style="font-size:11.5px;color:var(--faint);margin:8px 0 0;line-height:1.5">
+      Trips are stored on this device only. Clearing Safari website data deletes them, and
+      they do not sync between devices or back up anywhere. Export is the durable copy.</p>`;
+}
+
+function bindTripHistory() {
+  document.querySelectorAll('[data-topen]').forEach(b => b.addEventListener('click', () => {
+    TRIPUI.open = b.dataset.topen; TRIPUI.msg = null; renderTrip();
+  }));
+  if ($('#trExportAll')) $('#trExportAll').addEventListener('click', async () => {
+    const d = tripStore();
+    const r = await shareText('pilot-trips.csv', 'text/csv', tripsToCsv(d.trips));
+    TRIPUI.msg = r === 'shared' ? 'Shared.' : r === 'downloaded' ? 'Saved to your downloads.'
+      : r === 'cancelled' ? null : 'Could not export.';
+    TRIPUI.msgOk = r === 'shared' || r === 'downloaded';
+    renderTrip();
+  });
+}
+
 /* ---------- navigation ---------- */
 function show(id) {
   document.querySelectorAll('.view').forEach(v => v.classList.toggle('on', v.id === id));
@@ -7107,6 +8168,7 @@ document.querySelectorAll('#tabs button').forEach(b => b.addEventListener('click
   const id = b.dataset.tab;
   if (id === 'viewTides') { renderTides(); show('viewTides'); }
   else if (id === 'viewFog') { show('viewFog'); renderFog(); }
+  else if (id === 'viewTrip') { renderTrip(); show('viewTrip'); }
   else show(LAST ? 'viewBrief' : 'viewPlan');
 }));
 $('#navBtn').addEventListener('click', () => {
@@ -7121,6 +8183,22 @@ renderPlan();
 /* A brief generated at the berth should still be there after the app is
    reopened at the sea buoy with no signal. Regenerating uses the cache, so
    this works offline; the banner reports whatever age the data has. */
+/* An unfinished trip is never silently replaced — it is surfaced on open. */
+(function announceUnfinishedTrip() {
+  const d = tripStore();
+  if (!d.active) return;
+  const bar = document.createElement('div');
+  bar.className = 'mockbar';
+  bar.style.cssText = 'border-color:rgba(78,155,209,.4);background:rgba(78,155,209,.08);color:#A9CDE8';
+  bar.innerHTML = `<b style="color:var(--info)">Unfinished trip found</b><br>
+    Trip ${esc(String(d.active.number))}${d.active.ship && d.active.ship.trim() ? '<br>' + esc(d.active.ship) : ''}<br>
+    ${esc(d.active.fromName)} → ${esc(d.active.toName)}
+    <button class="btn" id="resumeTrip" style="margin-top:10px">Resume trip</button>`;
+  const host = $('#viewPlan');
+  host.insertBefore(bar, host.firstChild);
+  $('#resumeTrip').addEventListener('click', () => { renderTrip(); show('viewTrip'); });
+})();
+
 (async function restoreLastBrief() {
   const saved = Store.get('lastBrief', null);
   if (!saved) return;
