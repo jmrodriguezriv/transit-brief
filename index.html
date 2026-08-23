@@ -4899,6 +4899,24 @@ const CACHE_MAX_ENTRIES = 120;
 const STALE_AFTER = { weather: 6 * HOUR, visibility: 6 * HOUR, wave: 12 * HOUR,
                       tide: 36 * HOUR, current: 36 * HOUR };
 
+/* Which fields a feed actually delivered. A source can return hundreds of rows
+   and still carry nothing in the field you need — invisible from a row count,
+   and exactly what a LIVE badge hides. */
+const COVERAGE_FIELDS = {
+  weather: ['windKts', 'gustKts', 'windFromDeg', 'visibilityNm', 'tempF', 'dewpointF', 'thunderPct'],
+  wave: ['seaFt', 'waveFromDeg', 'swellFt', 'swellFromDeg'],
+  visibility: ['visibilityNm', 'precipMm', 'lowCloudPct'],
+  tide: ['heightFt'], current: ['signedKts'], currentObs: ['speedKts', 'setDeg']
+};
+
+function fieldCoverage(kind, series) {
+  const fields = COVERAGE_FIELDS[kind];
+  if (!fields || !series || !series.length) return null;
+  const out = {};
+  for (const f of fields) out[f] = series.filter(r => r[f] != null).length;
+  return { total: series.length, fields: out, empty: fields.filter(f => out[f] === 0) };
+}
+
 function cacheRead() { return Store.get(CACHE_KEY, {}); }
 
 function cacheWrite(key, pack) {
@@ -5005,11 +5023,13 @@ async function loadEnvironment(route, win) {
 
   await Promise.all(jobs.map(async job => {
     const label = (STATIONS[job.zoneKey] || {}).name || job.zoneKey;
-    const where = job.key.includes(':') ? `${label} @ ${job.node.name}` : label;
+    const kindName = { weather: 'Wind/temp', wave: 'Waves', visibility: 'Visibility/rain' }[job.kind] || job.kind;
+    const where = job.key.includes(':') ? `${kindName} @ ${job.node.name}` : `${kindName} — ${label}`;
     try {
       const r = await P[job.kind].load(job.zoneKey, win, job.node);
       data[job.kind][job.key] = r;
       sources.push({ station: job.key, kind: job.kind, name: where, ...r,
+                     coverage: fieldCoverage(job.kind, r.series),
                      series: undefined, count: r.series.length });
     } catch (e) {
       data[job.kind][job.key] = null;
@@ -5032,6 +5052,7 @@ async function loadEnvironment(route, win) {
       const r = await P[kind].load(g.id, win, g, g);
       gaugeData[kind][g.id] = r;
       sources.push({ station: g.id, kind, name: g.name + ' — ' + kind, ...r,
+                     coverage: fieldCoverage(kind, r.series),
                      series: undefined, count: r.series.length });
     } catch (e) {
       const msg = String(e.message || e);
@@ -5102,6 +5123,7 @@ async function loadEnvironment(route, win) {
                     biasKts: bias, samples: pairs.length });
       sources.push({ station: g.id + '-obs', kind: 'currentObs',
                      name: g.name + ' — observed current', ...obs,
+                     coverage: fieldCoverage('currentObs', obs.series),
                      series: undefined, count: obs.series.length });
     } catch (e) {
       /* This gauge is configured to publish observations, so nothing coming
@@ -6232,10 +6254,13 @@ function renderBrief(b) {
     if (s.quality === 'FAILED') detail = esc(String(s.error).slice(0, 70));
     else if (s.quality === 'CACHED') detail = `${s.count} pts · ${fmtDuration(s.ageMs)} old`;
     else detail = `${s.count} pts · ${fmtClock(s.retrieved, tz)}`;
+    /* A feed can be LIVE and still deliver nothing in the field you need. */
+    const empties = s.coverage && s.coverage.empty.length
+      ? `<br><span style="color:var(--caution);font-size:11px">no values for ${esc(s.coverage.empty.join(', '))}</span>` : '';
     return `<div class="src">
       <span class="n">${esc(s.name)}</span>
       <span class="st">${detail}
-        <span class="badge ${badgeFor(s)}">${s.stale ? 'STALE' : esc(s.quality)}</span></span>
+        <span class="badge ${badgeFor(s)}">${s.stale ? 'STALE' : esc(s.quality)}</span>${empties}</span>
     </div>`;
   }).join('');
 
