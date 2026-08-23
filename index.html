@@ -286,8 +286,19 @@ input.spd:focus{outline:none;border-color:var(--info)}
 .offneed{display:block;font-size:11px;color:var(--faint);font-weight:400;margin-top:1px}
 .offmsg{font-family:var(--mono);font-size:13px;background:var(--deck);border:1px solid var(--line);
   border-radius:9px;padding:11px 12px;margin-top:9px;line-height:1.45;color:var(--ink)}
+.spanwarn{border:1px solid rgba(224,90,82,.5);background:rgba(224,90,82,.09);
+  border-radius:12px;padding:16px;margin-top:6px}
+.spanwarn-h{font-size:12px;font-weight:750;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--port)}
+.spanwarn-b{font-size:15px;font-weight:600;color:var(--ink);margin-top:8px;line-height:1.45}
+.spanwarn-l{font-size:10px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;
+  color:var(--faint);margin-top:14px}
+.spanwarn-u{margin:7px 0 0;padding-left:18px;font-size:13px;color:var(--dim);line-height:1.6}
+.spanwarn-f{font-size:11.5px;color:var(--faint);margin-top:13px;line-height:1.5;
+  padding-top:11px;border-top:1px solid var(--line-soft)}
 .offready{font-size:9.5px;font-weight:750;letter-spacing:.16em;text-transform:uppercase;
   color:var(--stbd);margin-top:10px}
+.offready.partial{color:var(--caution);letter-spacing:.1em}
 .offbig{display:block;width:100%;margin-top:9px;padding:16px;border:none;border-radius:11px;
   background:var(--stbd);color:#04150D;font-size:14px;font-weight:750;letter-spacing:.12em;
   text-transform:uppercase;cursor:pointer}
@@ -418,7 +429,7 @@ var CHANNEL_DATA = {
  },
  "letGoMinutes": 20,
  "disembarkMinutes": 6,
- "seawardNodeId": "MK_1_2",
+ "seawardNodeId": "CC",
  "chainLengthNm": 57.861,
  "gauges": [
   {
@@ -476,6 +487,20 @@ var CHANNEL_DATA = {
   }
  ],
  "nodes": [
+  {
+   "id": "CC",
+   "name": "CC Buoy",
+   "lon": -93.221546,
+   "lat": 29.333575,
+   "type": "PILOT_STATION",
+   "chainNm": -1.808,
+   "stations": {
+    "weather": "W_OFFSHORE",
+    "wave": "V_OFFSHORE",
+    "tide": "CHAIN",
+    "current": "CHAIN"
+   }
+  },
   {
    "id": "MK_1_2",
    "name": "Buoy 1/2",
@@ -888,7 +913,7 @@ var CHANNEL_DATA = {
   },
   {
    "id": "MK_60",
-   "name": "Light/Buoy 60",
+   "name": "60 Beacon",
    "lon": -93.346401,
    "lat": 29.838749,
    "type": "MARK",
@@ -1904,6 +1929,15 @@ var CHANNEL_DATA = {
   }
  ],
  "edges": [
+  {
+   "a": "CC",
+   "b": "MK_1_2",
+   "nm": 1.808,
+   "zone": "Outer bar",
+   "loaded": 11.8,
+   "light": 13.0,
+   "dir": "BOTH"
+  },
   {
    "a": "MK_1_2",
    "b": "MK_1A_2A",
@@ -4539,9 +4573,11 @@ const TRIP_EVENTS = [
   { key: 'LAST_LINE',  label: 'Last Line',    nodeId: null, manual: true, when: 'OUTBOUND' },
   { key: 'BR210',      label: 'I-210 Bridge', nodeId: 'BR210' },
   { key: 'ICW',        label: 'ICW',          nodeId: 'MK_91_92' },
-  { key: 'B60',        label: '60 Buoy',      nodeId: 'MK_60' },
+  { key: 'B60',        label: '60 Beacon',    nodeId: 'MK_60' },
   { key: 'B36',        label: '36 Buoy',      nodeId: 'MK_35_36' },
-  { key: 'CC',         label: 'CC Buoy',      nodeId: null, pendingPosition: true },
+  /* Calcasieu Channel Lighted Buoy CC — a geographic route point that anchors
+     the timeline like any other checkpoint. */
+  { key: 'CC',         label: 'CC Buoy',      nodeId: 'CC' },
   { key: 'FIRST_LINE', label: 'First Line',   nodeId: null, manual: true, when: 'INBOUND' },
   { key: 'ALL_FAST',   label: 'All Fast',     nodeId: null, manual: true, when: 'INBOUND' }
 ];
@@ -4828,6 +4864,34 @@ async function tripSyncToAnchor(eventKey, epoch) {
   Store.set('anchors', anchors);
   await rebuildWithAnchors(anchors);
   return true;
+}
+
+/* ---------------------------------------------------------------------------
+   TRANSIT SPAN VALIDATION
+   A harbour transit is a matter of hours. A span of days means a mistyped date
+   somewhere — the sail date, a position report, or an edited actual time. The
+   calculation stops rather than producing tide, current, fog and weather from
+   an obviously wrong timeline. Nothing is silently corrected; the pilot fixes
+   the input. The 1500-sample bound stays as a second line of defence.
+   ------------------------------------------------------------------------- */
+const MAX_TRANSIT_HOURS = 36;
+
+function validateTransitSpan(transit) {
+  const spanMs = transit.endEpoch - transit.sailEpoch;
+  if (spanMs < 0) {
+    return { valid: false, spanMs,
+      reason: 'The transit finishes before it starts.',
+      detail: 'A reported time is earlier than the departure.' };
+  }
+  const hours = spanMs / HOUR;
+  if (hours > MAX_TRANSIT_HOURS) {
+    const days = spanMs / (24 * HOUR);
+    return { valid: false, spanMs, hours,
+      reason: days >= 2 ? `This trip currently spans ${Math.round(days)} days.`
+                        : `This trip currently spans ${Math.round(hours)} hours.`,
+      detail: 'A harbour transit should not span this long.' };
+  }
+  return { valid: true, spanMs, hours };
 }
 
 const CACHE_KEY = 'envCache';
@@ -5333,6 +5397,19 @@ function buildBrief(input) {
   const rough = solveTransit({ fromId: input.fromId, toId: input.toId, sailEpoch: input.sailEpoch, applyCurrent: false, speedOverride: input.speedOverride, condition: input.condition, anchors: input.anchors });
   const win = { start: input.sailEpoch - HOUR, end: rough.endEpoch + 2 * HOUR };
 
+  /* Checked on the first solve, before any data is fetched or sampled. */
+  const spanCheck = validateTransitSpan(rough);
+  if (!spanCheck.valid) {
+    return Promise.resolve({
+      input, invalidSpan: spanCheck, transit: rough, tz: CHANNEL.meta.timezone,
+      stops: [], alerts: [], env: { sources: [], gaps: [], live: false, checks: [] },
+      tideEvents: [], currentEvents: [], maxCurrent: null, maxWind: null, ladder: null,
+      fogSummary: null, fogSplit: [], liveCurrents: [], getOff: null, jetties: null,
+      thresholds: Store.get('thresholds', DEFAULT_THRESHOLDS), window: null,
+      currentAt: () => null
+    });
+  }
+
   return loadEnvironment(rough.waypoints.map(w => w.point), win).then(env => {
     // Pass 2: re-solve, now with real current in the loop.
     // Current is sampled at the vessel's position along the channel, not at a
@@ -5357,7 +5434,12 @@ function buildBrief(input) {
     // Rather than reading events off one gauge, walk the timeline and sample
     // the interpolated field at wherever the vessel is. High water then means
     // high water at the ship, and its location comes out for free.
-    const STEP = 6 * MIN;
+    /* Six minutes on any normal transit. The bound is a second line of defence
+       only: an invalid span is already refused above, so this exists to ensure
+       no unexpected edge case can freeze the app. */
+    const SPAN = Math.max(0, transit.endEpoch - transit.underwayEpoch);
+    const MAX_SAMPLES = 1500;
+    const STEP = Math.max(6 * MIN, Math.ceil(SPAN / MAX_SAMPLES / MIN) * MIN);
     const vesselTide = [], vesselCurrent = [];
     for (let t = transit.underwayEpoch; t <= transit.endEpoch + STEP; t += STEP) {
       const loc = locateAt(transit, t);
@@ -5834,6 +5916,12 @@ function renderPlan() {
     <div class="field"><label for="fTo">To</label>
       <select class="control" id="fTo">${opts(form.toId)}</select></div>
 
+    <div class="field"><label>Data</label>
+      <div class="seg" id="fLive">
+        <button type="button" data-v="0"${!Store.get('liveData', false) ? ' class="on"' : ''}>Simulated</button>
+        <button type="button" data-v="1"${Store.get('liveData', false) ? ' class="on"' : ''}>Live</button>
+      </div></div>
+
     <div class="field"><label>Condition</label>
       <div class="seg" id="fCond">
         <button type="button" data-v="LOADED"${form.condition !== 'LIGHT' ? ' class="on"' : ''}>Loaded</button>
@@ -5875,6 +5963,10 @@ function renderPlan() {
   };
   for (const id of ['fDate','fTime','fFrom','fTo','fVessel','fLoa','fDraft','fSpeed'])
     $('#' + id).addEventListener('change', sync);
+  document.querySelectorAll('#fLive button').forEach(b => b.addEventListener('click', () => {
+    Store.set('liveData', b.dataset.v === '1');
+    document.querySelectorAll('#fLive button').forEach(x => x.classList.toggle('on', x === b));
+  }));
   document.querySelectorAll('#fCond button').forEach(b => b.addEventListener('click', () => {
     form.condition = b.dataset.v; Store.set('form', form);
     document.querySelectorAll('#fCond button').forEach(x => x.classList.toggle('on', x === b));
@@ -5928,6 +6020,35 @@ function windLine(w) {
 
 function renderBrief(b) {
   const tz = b.tz, t = b.transit;
+
+  /* An invalid span produces no brief at all. Showing a partial one alongside
+     the warning would invite acting on numbers derived from a wrong date. */
+  if (b.invalidSpan) {
+    const anchors = Store.get('anchors', []);
+    $('#viewBrief').innerHTML = `
+      <button class="backbtn" id="bBack">← New brief</button>
+      <div class="spanwarn">
+        <div class="spanwarn-h">Check transit date / time</div>
+        <div class="spanwarn-b">${esc(b.invalidSpan.reason)}<br>${esc(b.invalidSpan.detail)}</div>
+        <div class="spanwarn-l">Please verify:</div>
+        <ul class="spanwarn-u">
+          <li>Departure date and time — currently ${fmtDay(t.sailEpoch, tz)} ${fmtClock(t.sailEpoch, tz)}</li>
+          <li>Updated Position date and time${anchors.length
+            ? ` — ${anchors.map(a => {
+                let nm = a.nodeId; try { nm = pointById(a.nodeId).name; } catch (e) {}
+                return `${esc(nm)} ${fmtDay(a.epoch, tz)} ${fmtClock(a.epoch, tz)}`;
+              }).join('; ')}` : ' — none entered'}</li>
+          <li>Any manually edited actual time</li>
+        </ul>
+        <div class="spanwarn-f">No tide, current, weather, fog or ETA results are shown,
+          because they would be derived from this timeline. Nothing has been corrected
+          for you — fix the input above.</div>
+        ${anchors.length ? '<button class="btn" id="spanClear">Clear position updates</button>' : ''}
+      </div>`;
+    $('#bBack').addEventListener('click', () => show('viewPlan'));
+    if ($('#spanClear')) $('#spanClear').addEventListener('click', clearAnchors);
+    return;
+  }
   const from = t.waypoints[0].point, to = t.waypoints[t.waypoints.length - 1].point;
   const last = b.stops[b.stops.length - 1];
 
@@ -6328,7 +6449,7 @@ function renderBrief(b) {
     })()}
 
     <div class="rule"></div>
-    <p class="eyebrow">Update ETA</p>
+    <p class="eyebrow">Log position</p>
     <div class="uw" id="cpBox"></div>
 
     <div class="rule"></div>
@@ -6467,10 +6588,9 @@ function renderAdmin() {
 
     <div class="adminsec">
       <p class="eyebrow">Data</p>
-      <div class="seg" id="aLive">
-        <button type="button" data-v="0"${!Store.get('liveData', false) ? ' class="on"' : ''}>Simulated</button>
-        <button type="button" data-v="1"${Store.get('liveData', false) ? ' class="on"' : ''}>Live</button>
-      </div>
+      <p style="font-size:12.5px;color:var(--dim);margin:0;line-height:1.55">
+        Currently <b style="color:var(--ink)">${Store.get('liveData', false) ? 'Live' : 'Simulated'}</b>.
+        Switch it on the plan screen, above the Generate button.</p>
       <p style="font-size:12.5px;color:var(--dim);margin:12px 0 0;line-height:1.55">
         Live pulls wind, gusts and visibility from the NWS gridded forecast at each
         waypoint's own position, waves and swell from Open-Meteo's marine model, and
@@ -6549,10 +6669,6 @@ function renderAdmin() {
     </div>`;
 
   $('#aBack').addEventListener('click', () => show('viewPlan'));
-  document.querySelectorAll('#aLive button').forEach(b => b.addEventListener('click', () => {
-    Store.set('liveData', b.dataset.v === '1');
-    document.querySelectorAll('#aLive button').forEach(x => x.classList.toggle('on', x === b));
-  }));
   $('#aSave').addEventListener('click', () => {
     try { Store.set('thresholds', JSON.parse($('#aTh').value)); $('#aMsg').textContent = 'Saved.'; }
     catch (e) { $('#aMsg').textContent = 'Not valid JSON — nothing saved.'; }
@@ -6625,8 +6741,11 @@ function runSelfTest() {
     const r = buildLegs('BT4', PILOT_ID);
     near(r.legs.reduce((s, l) => s + l.distanceNm, 0), r.totalNm, 0.01);
   });
-  T('BT4 to pilot station follows the river', () =>
-    near(buildLegs('BT4', PILOT_ID).totalNm, 57.86, 0.05));
+  T('BT4 to the seaward end follows the river', () =>
+    // 57.86 to Buoy 1/2, plus 1.81 out to CC Buoy.
+    near(buildLegs('BT4', PILOT_ID).totalNm, 59.67, 0.05));
+  T('BT4 to Buoy 1/2 is unchanged by adding CC', () =>
+    near(buildLegs('BT4', 'MK_1_2').totalNm, 57.86, 0.05));
   T('Clooney loop is longer outbound', () =>
     near(buildLegs('P66_3', PILOT_ID).totalNm - buildLegs(PILOT_ID, 'P66_3').totalNm, 0.61, 0.05));
   T('Clooney outbound rounds the island', () => {
@@ -6637,10 +6756,10 @@ function runSelfTest() {
     const ids = buildLegs(PILOT_ID, 'P66_3').route.map(p => p.id);
     if (!ids.includes('MK_121') || ids.includes('LOOP_23')) throw new Error('wrong water');
   });
-  T('all seven boarding points are selectable', () => {
+  T('all eight boarding points are selectable', () => {
     const names = selectablePoints().filter(n => n.type === 'PILOT_STATION').map(n => n.name);
-    eq(names.length, 7);
-    for (const w of ['Buoy 1/2','Buoy 2B','Buoy 8','Buoy 14','Buoy 18','Buoy 22','Buoy 30'])
+    eq(names.length, 8);
+    for (const w of ['CC Buoy','Buoy 1/2','Buoy 2B','Buoy 8','Buoy 14','Buoy 18','Buoy 22','Buoy 30'])
       if (!names.includes(w)) throw new Error('missing ' + w);
   });
   T('pilot-off computed at every boarding point', () => {
@@ -6865,23 +6984,22 @@ function renderCheckpoints() {
   if (!box || !LAST) return;
   const t = LAST.transit, tz = LAST.tz;
   const anchors = Store.get('anchors', []);
+  const trip = tripStore().active;
   const wps = t.waypoints;
   const order = wps.map(w => w.point.id);
 
   const msg = CP.message
     ? `<div class="cpmsg${CP.messageOk ? ' ok' : ''}">${esc(CP.message)}</div>` : '';
 
-  /* ---- editing an existing report ---- */
+  /* ---- editing an existing position report ---- */
   if (CP.editing) {
     const a = anchors.find(x => x.nodeId === CP.editing);
     if (!a) { CP.editing = null; renderCheckpoints(); return; }
-    /* Any waypoint may be chosen, including ones behind the current anchor —
-       the whole point is to correct a report entered at the wrong place. */
     const sel = CP.pending || a.nodeId;
     const timeVal = CP.time != null ? CP.time : fmtClock(a.epoch, tz);
     box.innerHTML = `${msg}
-      <p class="eyebrow" style="margin-bottom:10px">Edit report</p>
-      <div class="field" style="margin-bottom:10px"><label for="cpSel">Updated position</label>
+      <p class="eyebrow" style="margin-bottom:10px">Correct a report</p>
+      <div class="field" style="margin-bottom:10px"><label for="cpSel">Position</label>
         <select class="control" id="cpSel">${wps.map(w =>
           `<option value="${w.point.id}"${w.point.id === sel ? ' selected' : ''}>${esc(w.point.name)} · plan ${fmtClock(w.originalEta, tz)}</option>`).join('')}</select></div>
       <div class="field" style="margin-bottom:12px"><label for="cpTime">Actual time</label>
@@ -6889,80 +7007,187 @@ function renderCheckpoints() {
       <button class="generate" id="cpSave" style="padding:15px">Save changes</button>
       <button class="btn" id="cpCancel" style="margin-top:8px">Cancel</button>
       <p style="font-size:11.5px;color:var(--faint);margin:8px 0 0;line-height:1.5">
-        This replaces the existing report rather than adding another. Saving re-runs the
-        ETAs and everything that depends on them.</p>`;
+        Replaces the existing report. The timeline, the trip record and the office message
+        all follow.</p>`;
     $('#cpSel').addEventListener('change', e => { CP.pending = e.target.value; });
     $('#cpTime').addEventListener('change', e => { CP.time = e.target.value; });
     $('#cpCancel').addEventListener('click', () => {
-      CP.editing = null; CP.pending = null; CP.time = null; CP.message = null;
-      renderCheckpoints();
+      CP.editing = null; CP.pending = null; CP.time = null; CP.message = null; renderCheckpoints();
     });
     $('#cpSave').addEventListener('click', () =>
       saveEditedReport(a.nodeId, $('#cpSel').value, $('#cpTime').value));
     return;
   }
 
-  /* ---- normal view ---- */
-  const lastAnchor = anchors.length ? anchors[anchors.length - 1] : null;
-  const lastIdx = lastAnchor ? order.indexOf(lastAnchor.nodeId) : -1;
-  const ahead = wps.map((w, i) => ({ w, i })).filter(x => x.i > lastIdx);
+  const targets = logTargets(t);
+  const outbound = !!t.outbound;
 
-  const reports = anchors.map(a => {
+  /* ---- what has been reported, with the office message right here ---- */
+  const logged = [];
+  for (const a of anchors) {
     const w = wps.find(x => x.point.id === a.nodeId);
-    if (!w) return '';
-    const delta = a.epoch - w.originalEta;
-    return `<div class="cprep">
-      <span class="cprepl"><b>${esc(w.point.name)}</b>
-        <span>Actual ${fmtClock(a.epoch, tz)} · plan ${fmtClock(w.originalEta, tz)}${
-          Math.abs(delta) >= 60000 ? ` · ${delta > 0 ? '+' : '−'}${fmtDuration(Math.abs(delta))}` : ''}</span></span>
-      <button class="btn cpedit" data-edit="${esc(a.nodeId)}">Edit</button>
+    if (!w) continue;
+    const tripEv = TRIP_EVENTS.find(e => e.nodeId === a.nodeId);
+    logged.push({ label: pickerLabel(a.nodeId, w.point.name), epoch: a.epoch,
+                  plan: w.originalEta, editId: a.nodeId,
+                  tripKey: tripEv ? tripEv.key : null });
+  }
+  if (trip) for (const e of TRIP_EVENTS) {
+    if (e.nodeId || !trip.events[e.key]) continue;
+    if (e.when && (e.when === 'OUTBOUND') !== outbound) continue;
+    logged.push({ label: e.label, epoch: trip.events[e.key].epoch, tripKey: e.key });
+  }
+  logged.sort((x, y) => x.epoch - y.epoch);
+
+  const howLabel = { messages: 'Messages opened', shared: 'Share opened', copied: 'Copied' };
+  const loggedHtml = logged.map(item => {
+    const step = trip ? officeStepFor(item.tripKey, outbound) : null;
+    const st = step ? officeStatus(step, trip, tz) : null;
+    let office = '';
+    if (st && st.state === 'ready') {
+      /* The message always leads with the actual time, so it is sendable even
+         when operational detail is outstanding — but say so rather than calling
+         a partial report ready. */
+      const outstanding = officeMissing(step, trip).filter(x => x !== 'actual time');
+      office = `<div class="offready${outstanding.length ? ' partial' : ''}">${
+          outstanding.length ? 'Ready — ' + esc(outstanding.join(', ')) + ' still outstanding' : 'Ready for office'}</div>
+        <div class="offmsg">${esc(st.text)}</div>
+        <button class="offbig${outstanding.length ? ' correction' : ''}" data-lsend="${esc(step.key)}">${
+          outstanding.length ? 'Send without ' + esc(outstanding.join(', ')) : 'Send message'}</button>`;
+    }
+    else if (st && st.state === 'changed')
+      office = `<div class="offwarn">Already prepared with previous information</div>
+        <div class="offmsg">CORRECTION — ${esc(st.text)}</div>
+        <button class="offbig correction" data-lsend="${esc(step.key)}" data-correction="1">Send correction</button>`;
+    else if (st && st.state === 'prepared')
+      office = `<div class="offmsg">${esc(st.text)}</div>
+        <div class="offstate">${esc(howLabel[st.how] || 'Prepared')} ${fmtClock(st.at, tz)} —
+          the app cannot confirm it was sent</div>
+        <button class="btn offsend" data-lsend="${esc(step.key)}">Open again</button>`;
+    else if (st && st.state === 'not-ready')
+      office = `<div class="offpend">Office report needs ${esc(officeMissing(step, trip).join(', '))} —
+        add it on the Trip tab</div>`;
+
+    const delta = item.plan != null ? item.epoch - item.plan : null;
+    return `<div class="offrow">
+      <div class="offhead">
+        <span class="offlbl">✓ ${esc(item.label)}
+          <span class="offneed">${fmtClock(item.epoch, tz)}${
+            delta != null && Math.abs(delta) >= 60000
+              ? ` · plan ${fmtClock(item.plan, tz)} · ${delta > 0 ? '+' : '−'}${fmtDuration(Math.abs(delta))}` : ''}</span></span>
+        ${item.editId ? `<button class="btn cpedit" data-edit="${esc(item.editId)}">Edit</button>` : ''}
+      </div>
+      ${office}
     </div>`;
   }).join('');
 
-  const header = anchors.length
-    ? `<p class="eyebrow" style="margin-bottom:8px">Updated position</p>${reports}` : '';
-
-  if (!ahead.length) {
-    box.innerHTML = `${msg}${header}
+  if (!targets.length) {
+    box.innerHTML = `${msg}${loggedHtml}
       <p style="font-size:12px;color:var(--faint);margin:10px 0 0;line-height:1.5">
-        Nothing remaining ahead of the last report.</p>
-      ${anchors.length ? '<button class="btn" id="cpClear" style="margin-top:10px">Clear updates</button>' : ''}`;
+        Nothing left to report on this passage.</p>
+      ${anchors.length ? '<button class="btn" id="cpClear" style="margin-top:10px">Clear position updates</button>' : ''}`;
     bindCheckpointButtons();
     return;
   }
 
-  const sel = (CP.pending && ahead.some(x => x.w.point.id === CP.pending))
-    ? CP.pending : ahead[0].w.point.id;
+  const sel = (CP.pending && targets.some(x => x.id === CP.pending)) ? CP.pending : targets[0].id;
   const timeVal = CP.time != null ? CP.time : fmtClock(Date.now(), tz);
+  const selTarget = targets.find(x => x.id === sel);
+  const willDo = [];
+  if (selTarget && selTarget.kind === 'POSITION') willDo.push('re-solve the ETAs ahead');
+  if (selTarget && selTarget.tripKey) willDo.push('record it in the trip log');
+  if (trip && selTarget && officeStepFor(selTarget.tripKey, outbound)) willDo.push('ready the office message');
 
-  box.innerHTML = `${msg}${header}
-    <div class="field" style="margin:${header ? '14px' : '0'} 0 10px">
-      <label for="cpSel">Current position</label>
-      <select class="control" id="cpSel">${ahead.map(x =>
-        `<option value="${x.w.point.id}"${x.w.point.id === sel ? ' selected' : ''}>${esc(x.w.point.name)} · plan ${fmtClock(x.w.eta, tz)}</option>`).join('')}</select>
+  box.innerHTML = `${msg}${loggedHtml}
+    <div class="field" style="margin:${loggedHtml ? '14px' : '0'} 0 10px">
+      <label for="cpSel">Position or event</label>
+      <select class="control" id="cpSel">
+        ${(() => {
+          const pos = targets.filter(x => x.kind === 'POSITION');
+          const ev = targets.filter(x => x.kind === 'EVENT');
+          const opt = x => `<option value="${esc(x.id)}"${x.id === sel ? ' selected' : ''}>${esc(x.label)}${
+            x.eta ? ' · plan ' + fmtClock(x.eta, tz) : ''}</option>`;
+          let h = '';
+          if (pos.length) h += `<optgroup label="Positions">${pos.map(opt).join('')}</optgroup>`;
+          if (ev.length) h += `<optgroup label="Operational events">${ev.map(opt).join('')}</optgroup>`;
+          return h;
+        })()}
+      </select>
     </div>
     <div class="field" style="margin-bottom:10px">
-      <label for="cpTime">Current time</label>
+      <label for="cpTime">Actual time</label>
       <input class="control" type="time" id="cpTime" value="${esc(timeVal)}">
     </div>
-    <button class="generate" id="cpGo" style="padding:15px">Update ETAs</button>
-    ${anchors.length ? '<button class="btn" id="cpClear" style="margin-top:8px">Clear updates</button>' : ''}
+    <button class="generate" id="cpGo" style="padding:15px">Log it</button>
+    ${anchors.length ? '<button class="btn" id="cpClear" style="margin-top:8px">Clear position updates</button>' : ''}
     <p style="font-size:11.5px;color:var(--faint);margin:8px 0 0;line-height:1.5">
-      Everything ahead is re-solved from this point — ETAs, fog, rain, wind, tide,
-      current, the jetties card and the finish. Points already passed keep their times.</p>`;
+      One entry — this will ${willDo.length ? esc(willDo.join(', ')) : 'record the time'}.
+      ${selTarget && selTarget.awaitingPosition
+        ? `<br><span style="color:var(--caution)">${esc(selTarget.label)} has no charted position in the app yet,
+           so it cannot re-solve the ETAs. Supply its coordinates and it will behave like any other checkpoint.</span>`
+        : ''}
+      ${trip ? '' : 'Start a trip on the Trip tab and office messages appear here too.'}</p>`;
   bindCheckpointButtons();
 }
 
 function bindCheckpointButtons() {
-  if ($('#cpSel')) $('#cpSel').addEventListener('change', e => { CP.pending = e.target.value; });
+  if ($('#cpSel')) $('#cpSel').addEventListener('change', e => { CP.pending = e.target.value; renderCheckpoints(); });
   if ($('#cpTime')) $('#cpTime').addEventListener('change', e => { CP.time = e.target.value; });
-  if ($('#cpGo')) $('#cpGo').addEventListener('click', () =>
-    applyCheckpoint($('#cpSel').value, $('#cpTime').value));
+  if ($('#cpGo')) $('#cpGo').addEventListener('click', () => applyLog($('#cpSel').value, $('#cpTime').value));
   if ($('#cpClear')) $('#cpClear').addEventListener('click', clearAnchors);
   document.querySelectorAll('.cpedit').forEach(btn => btn.addEventListener('click', () => {
     CP.editing = btn.dataset.edit; CP.pending = null; CP.time = null; CP.message = null;
     renderCheckpoints();
   }));
+  /* Sending is always an explicit tap; nothing here fires on render. */
+  document.querySelectorAll('[data-lsend]').forEach(btn => btn.addEventListener('click', async () => {
+    const key = btn.dataset.lsend;
+    const trip = tripStore().active;
+    const step = officeSequence(!!LAST.transit.outbound).find(x => x.key === key);
+    if (!trip || !step) return;
+    const text = officeMessage(step, trip, LAST.tz);
+    if (!text) { CP.message = 'That report is not ready yet.'; CP.messageOk = false; renderCheckpoints(); return; }
+    const payload = btn.dataset.correction ? `CORRECTION — ${text}` : text;
+    const how = await deliverOfficeMessage(payload);
+    if (how === 'cancelled') { renderCheckpoints(); return; }
+    if (how === 'failed') {
+      CP.message = 'Could not open Messages or share. Set an office number in Setup.';
+      CP.messageOk = false; renderCheckpoints(); return;
+    }
+    markOfficePrepared(key, text, how);
+    CP.message = how === 'messages' ? 'Messages opened — tap Send there.'
+      : how === 'shared' ? 'Share opened — the office is not preselected.'
+      : 'Copied — paste it into Messages.';
+    CP.messageOk = true;
+    renderCheckpoints();
+  }));
+}
+
+/* One tap: timeline, trip record and office message. */
+async function applyLog(targetId, hhmm) {
+  if (CP.busy || !LAST) return;
+  const target = logTargets(LAST.transit).find(x => x.id === targetId);
+  if (!target) { CP.message = 'Choose a position or event.'; CP.messageOk = false; renderCheckpoints(); return; }
+  CP.busy = true;
+  const btn = $('#cpGo');
+  if (btn) { btn.textContent = 'Logging…'; btn.disabled = true; }
+  try {
+    const r = await logCheckpoint(target, hhmm);
+    if (!r.ok) { CP.message = r.error; CP.messageOk = false; }
+    else {
+      const did = [];
+      if (r.anchored) did.push('ETAs updated');
+      if (r.tripKey) did.push('trip log');
+      if (r.officeStep) did.push('office message ready');
+      CP.message = `${target.label} logged — ${did.join(', ')}.`;
+      CP.messageOk = true;
+      CP.pending = null; CP.time = null;
+    }
+  } catch (e) {
+    CP.message = 'Could not log: ' + (e.message || e); CP.messageOk = false;
+  }
+  CP.busy = false;
+  renderCheckpoints();
 }
 
 /* Replace an existing report. Never adds a second one on top of it, and never
@@ -7015,6 +7240,126 @@ function resolveReportTime(hhmm, nearEpoch, tz) {
 
 const CP = { pending: null, time: null, busy: false,
              editing: null, message: null };
+
+/* ---------------------------------------------------------------------------
+   ONE ACT OF LOGGING
+   Reporting a position is a single action. It re-anchors the timeline, records
+   the actual time in the trip log, and readies the office message — the pilot
+   does it once and everything that needs that time has it.
+
+   Targets are either a route waypoint (which can anchor the ETAs) or a manual
+   operational event like First Line, which has no position and only ever feeds
+   the trip log and the office report.
+   ------------------------------------------------------------------------- */
+/* The positions a pilot actually reports. The full route stays intact behind
+   this — every intermediate light still drives ETAs, weather, fog, tide and
+   current — but the picker offers only these, plus the berths, which come from
+   the channel data so a new dock appears without touching this list. */
+const PICKER_POSITIONS = [
+  { id: 'CC',       label: 'CC Buoy' },
+  { id: 'MK_7_8',   label: '8 Buoy' },
+  { id: 'MK_14',    label: '14 Buoy' },
+  { id: 'MK_18',    label: '18 Buoy' },
+  { id: 'MK_22',    label: '22 Buoy' },
+  { id: 'MK_29_30', label: '30 Buoy' },
+  { id: 'MK_35_36', label: '36 Buoy' },
+  { id: 'MK_41_42', label: '42 Buoy (Jetty)' },
+  { id: 'MK_60',    label: '60 Beacon' },
+  { id: 'MK_79_80', label: '80 Beacon' },
+  { id: 'MK_91_92', label: 'ICW' },
+  { id: 'BR210',    label: 'I-210 Bridge' }
+];
+
+function pickerLabel(nodeId, fallback) {
+  const p = PICKER_POSITIONS.find(x => x.id === nodeId);
+  return p ? p.label : fallback;
+}
+
+function logTargets(transit) {
+  const anchors = Store.get('anchors', []);
+  const order = transit.waypoints.map(w => w.point.id);
+  const lastIdx = anchors.length ? order.indexOf(anchors[anchors.length - 1].nodeId) : -1;
+
+  /* Berths come from the channel data, not a second list. The route's own
+     endpoints are always offered — a job that finishes at Buoy 1/2 must be
+     able to report arriving there even though it is not in the picker list. */
+  const berthIds = CHANNEL.nodes
+    .filter(n => n.type === 'BERTH' || n.type === 'ANCHORAGE')
+    .map(n => n.id);
+  const endpointIds = [transit.waypoints[0].point.id,
+                       transit.waypoints[transit.waypoints.length - 1].point.id];
+  const allowed = new Set([...PICKER_POSITIONS.map(p => p.id), ...berthIds, ...endpointIds]);
+
+  const positions = transit.waypoints
+    .map((w, i) => ({ w, i }))
+    .filter(x => x.i > lastIdx)
+    .filter(x => allowed.has(x.w.point.id))
+    .map(x => {
+      const tripEv = TRIP_EVENTS.find(e => e.nodeId === x.w.point.id);
+      return { kind: 'POSITION', id: x.w.point.id,
+               label: pickerLabel(x.w.point.id, x.w.point.name),
+               eta: x.w.eta, tripKey: tripEv ? tripEv.key : null };
+    });
+
+  /* Operational events only — First Line, Last Line, All Fast. These are
+     moments, not places, so they never anchor the timeline. A geographic event
+     that is simply not on this route is omitted rather than demoted to an
+     operational one. */
+  const events = TRIP_EVENTS
+    .filter(e => e.manual)
+    .filter(e => !e.when || (e.when === 'OUTBOUND') === !!transit.outbound)
+    .map(e => ({ kind: 'EVENT', id: 'EV_' + e.key, label: e.label,
+                 tripKey: e.key, manual: true }));
+
+  return [...positions, ...events];
+}
+
+/* The office step a target feeds, if any. */
+function officeStepFor(tripKey, outbound) {
+  if (!tripKey) return null;
+  return officeSequence(outbound).find(s => s.trip === tripKey) || null;
+}
+
+/**
+ * One entry point for every kind of report.
+ * @returns { ok, error, anchored, tripKey, officeStep }
+ */
+async function logCheckpoint(target, hhmm) {
+  const transit = LAST.transit, tz = LAST.tz;
+  const isPosition = target.kind === 'POSITION';
+
+  if (isPosition) {
+    const err = validateReport(target.id, hhmm, transit, { tz });
+    if (err) return { ok: false, error: err };
+  } else if (!hhmm || !/^\d{1,2}:\d{2}$/.test(hhmm)) {
+    return { ok: false, error: 'Enter a time as HH:MM.' };
+  }
+
+  const near = isPosition
+    ? (transit.waypoints.find(w => w.point.id === target.id) || {}).eta || Date.now()
+    : Date.now();
+  const epoch = resolveReportTime(hhmm, near, tz);
+
+  // 1. the trip record
+  if (target.tripKey) tripSetEvent(target.tripKey, epoch);
+
+  // 2. the timeline, where the target is a position on the route
+  let anchored = false;
+  if (isPosition) {
+    const anchors = Store.get('anchors', []).filter(a => a.nodeId !== target.id);
+    anchors.push({ nodeId: target.id, epoch });
+    const order = transit.waypoints.map(w => w.point.id);
+    anchors.sort((a, b) => order.indexOf(a.nodeId) - order.indexOf(b.nodeId));
+    Store.set('anchors', anchors);
+    tripSyncFromAnchors(anchors);
+    await rebuildWithAnchors(anchors);
+    anchored = true;
+  }
+
+  // 3. the office report, if this is one
+  const step = officeStepFor(target.tripKey, transit.outbound);
+  return { ok: true, anchored, tripKey: target.tripKey, officeStep: step ? step.key : null };
+}
 
 /* Validate a proposed report before it is allowed to change anything. An
    invalid entry must leave the transit exactly as it was. */
