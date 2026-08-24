@@ -4784,9 +4784,12 @@ function tripEventOrder(transit) {
   return [cc, ...onRoute, byKey('FIRST_LINE'), byKey('ALL_FAST')];
 }
 
-/* Full timestamp with zone, so a passage across midnight stays in order. */
+/* Full timestamp with zone, so a passage across midnight stays in order.
+   Truncated to the minute at the boundary: every recorded time is minute
+   precision regardless of which screen produced it. */
 function tripStamp(epoch) {
-  return { epoch, iso: new Date(epoch).toISOString(), tz: TZ() };
+  const e = toMinute(epoch);
+  return { epoch: e, iso: new Date(e).toISOString(), tz: TZ() };
 }
 
 function tripStartActive(number, ship, transit) {
@@ -4854,16 +4857,34 @@ function tripSyncFromAnchors(anchors) {
 
 /* The reverse: editing a trip time for an event that is also an active anchor
    must move the anchor, so the two cannot disagree. */
+/**
+ * An actual time for a geographic checkpoint is the same fact wherever it is
+ * entered, so it anchors the transit whether it came from Log position, the
+ * Trip tab or an office check-in. Creates the anchor if there is none and
+ * replaces it if there is — never a second entry for the same point.
+ *
+ * Manual events have no position and never anchor. A checkpoint not on the
+ * active route is refused rather than forcing the ship onto it.
+ *
+ * @returns { anchored, reason }
+ */
 async function tripSyncToAnchor(eventKey, epoch) {
   const ev = TRIP_EVENTS.find(e => e.key === eventKey);
-  if (!ev || !ev.nodeId || !LAST) return false;
-  const anchors = Store.get('anchors', []);
-  const idx = anchors.findIndex(a => a.nodeId === ev.nodeId);
-  if (idx < 0) return false;
-  anchors[idx] = { nodeId: ev.nodeId, epoch };
+  if (!ev) return { anchored: false, reason: 'unknown event' };
+  if (!ev.nodeId) return { anchored: false, reason: 'operational event, not a position' };
+  if (!LAST) return { anchored: false, reason: 'no active transit' };
+
+  const onRoute = LAST.transit.waypoints.some(w => w.point.id === ev.nodeId);
+  if (!onRoute) return { anchored: false, reason: 'not on the active route' };
+
+  const anchors = Store.get('anchors', []).filter(a => a.nodeId !== ev.nodeId);
+  anchors.push({ nodeId: ev.nodeId, epoch: toMinute(epoch) });
+  const order = LAST.transit.waypoints.map(w => w.point.id);
+  anchors.sort((a, b) => order.indexOf(a.nodeId) - order.indexOf(b.nodeId));
   Store.set('anchors', anchors);
+  tripSyncFromAnchors(anchors);
   await rebuildWithAnchors(anchors);
-  return true;
+  return { anchored: true };
 }
 
 /* ---------------------------------------------------------------------------
@@ -7246,6 +7267,11 @@ async function saveEditedReport(originalNodeId, nodeId, hhmm) {
   CP.busy = false;
 }
 
+/* Every recorded time is to the minute, so a tapped Log now and a typed 21:02
+   are the same instant. Truncates rather than rounds: tapping at 21:02:37
+   records 21:02, the minute the ship was actually there. */
+function toMinute(epoch) { return Math.floor(epoch / MIN) * MIN; }
+
 /* A wall-clock time with no date. Resolve it to whichever day puts it closest
    to the planned ETA at that waypoint, so a transit across midnight lands on
    the right side of it. */
@@ -7259,8 +7285,8 @@ function resolveReportTime(hhmm, nearEpoch, tz) {
     if (p.type !== 'literal') parts[p.type] = p.value;
   const base = wallToEpoch(+parts.year, +parts.month, +parts.day, hh, mm || 0, tz);
   const options = [base - 24 * HOUR, base, base + 24 * HOUR];
-  return options.reduce((a, b) =>
-    Math.abs(b - nearEpoch) < Math.abs(a - nearEpoch) ? b : a);
+  return toMinute(options.reduce((a, b) =>
+    Math.abs(b - nearEpoch) < Math.abs(a - nearEpoch) ? b : a));
 }
 
 const CP = { pending: null, time: null, busy: false,
@@ -7363,7 +7389,7 @@ async function logCheckpoint(target, hhmm) {
   const near = isPosition
     ? (transit.waypoints.find(w => w.point.id === target.id) || {}).eta || Date.now()
     : Date.now();
-  const epoch = resolveReportTime(hhmm, near, tz);
+  const epoch = toMinute(resolveReportTime(hhmm, near, tz));
 
   // 1. the trip record
   if (target.tripKey) tripSetEvent(target.tripKey, epoch);
@@ -7372,7 +7398,7 @@ async function logCheckpoint(target, hhmm) {
   let anchored = false;
   if (isPosition) {
     const anchors = Store.get('anchors', []).filter(a => a.nodeId !== target.id);
-    anchors.push({ nodeId: target.id, epoch });
+    anchors.push({ nodeId: target.id, epoch: toMinute(epoch) });
     const order = transit.waypoints.map(w => w.point.id);
     anchors.sort((a, b) => order.indexOf(a.nodeId) - order.indexOf(b.nodeId));
     Store.set('anchors', anchors);
@@ -8259,9 +8285,12 @@ function renderTrip() {
   });
   document.querySelectorAll('[data-tlog]').forEach(b => b.addEventListener('click', async () => {
     const key = b.dataset.tlog;
-    tripSetEvent(key, Date.now());
-    await tripSyncToAnchor(key, Date.now());
-    TRIPUI.msg = null; renderTrip();
+    const now = toMinute(Date.now());
+    tripSetEvent(key, now);
+    const r = await tripSyncToAnchor(key, now);
+    TRIPUI.msg = r.anchored ? 'Logged — ETAs re-solved from here.' : 'Logged.';
+    TRIPUI.msgOk = true;
+    renderTrip();
   }));
   document.querySelectorAll('[data-tedit]').forEach(b => b.addEventListener('click', () => {
     TRIPUI.editing = b.dataset.tedit; TRIPUI.editTime = null; TRIPUI.msg = null; renderTrip();
@@ -8279,9 +8308,13 @@ function renderTrip() {
     const near = existing ? existing.epoch : Date.now();
     const epoch = resolveReportTime(v, near, TZ());
     tripSetEvent(key, epoch);
-    await tripSyncToAnchor(key, epoch);
+    const r = await tripSyncToAnchor(key, epoch);
     TRIPUI.editing = null; TRIPUI.editTime = null;
-    TRIPUI.msg = 'Time updated.'; TRIPUI.msgOk = true;
+    TRIPUI.msg = r.anchored
+      ? 'Time saved — ETAs re-solved from here.'
+      : (r.reason === 'operational event, not a position'
+          ? 'Time saved.' : `Time saved — ${r.reason}, so the ETAs are unchanged.`);
+    TRIPUI.msgOk = true;
     renderTrip();
   });
   bindOffice(!!a.outbound);
@@ -8441,9 +8474,10 @@ async function officeSave(stepKey, outbound) {
   }
 
   tripSetEvent(step.trip, epoch);
-  await tripSyncToAnchor(step.trip, epoch);
+  const rr = await tripSyncToAnchor(step.trip, epoch);
   OFFICEUI.asking = null; OFFICEUI.time = null;
-  OFFICEUI.msg = 'Saved.'; OFFICEUI.msgOk = true;
+  OFFICEUI.msg = rr.anchored ? 'Saved — ETAs re-solved from here.' : 'Saved.';
+  OFFICEUI.msgOk = true;
   renderTrip();
 }
 
