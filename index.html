@@ -314,6 +314,16 @@ input.spd:focus{outline:none;border-color:var(--info)}
 .cprep:last-of-type{border-bottom:none}
 .cprepl b{font-size:13.5px;font-weight:650;display:block}
 .cprepl span{font-size:11px;color:var(--faint);display:block;margin-top:1px}
+.jrow{margin-top:3px !important}
+.jbox{border:1px solid var(--line);border-radius:11px;background:var(--hull);padding:14px;margin-top:8px}
+.jhead{font-size:14px;font-weight:600;color:var(--ink);margin-top:6px;line-height:1.45}
+.jline{font-size:12.5px;padding:3px 0}
+.jok{color:var(--stbd);font-weight:600}
+.jpend{color:var(--caution)}
+.jnone{color:var(--faint)}
+.jstate{font-size:12.5px;color:var(--caution);margin:6px 0 10px;line-height:1.45}
+.jwarn{font-size:12.5px;color:var(--caution);margin:8px 0 10px;line-height:1.45}
+.jbox .btn,.jbox .generate{margin-top:10px}
 .btn.cpedit{margin:0;padding:8px 14px;font-size:10px}
 .cpmsg{border:1px solid rgba(230,169,60,.45);background:rgba(230,169,60,.09);
   color:var(--caution);border-radius:9px;padding:10px 12px;font-size:12.5px;
@@ -4751,6 +4761,125 @@ function officeStatus(step, trip, tz) {
   return { state: 'prepared', text, how: prev.how, at: prev.at };
 }
 
+/* =========================================================================
+   TRIP JOURNAL
+   A completed trip can be filed into the pilot's own Airtable base through a
+   prefilled form link. The form URL carries no credential — it is already
+   whatever the pilot chose to share — so nothing secret lives in this app and
+   no server is needed. The pilot reviews and taps Submit in Airtable.
+
+   Field names are fixed and match the CSV export columns, so every pilot
+   builds an identical base and only the form URL differs per phone.
+   ======================================================================= */
+const JOURNAL_URL_KEY = 'journalFormUrl';
+
+/* ---------------------------------------------------------------------------
+   FIELD MAPPING — the single place Airtable column names are declared.
+   Renaming a column in the base means editing one line here and nothing else.
+   `from` names the value in the completed trip; event keys resolve to the
+   actual recorded time for that event.
+   ------------------------------------------------------------------------- */
+const JOURNAL_MAP = [
+  { column: 'Trip Number',  from: 'number' },
+  { column: 'Ship Name',    from: 'ship' },
+  { column: 'Date',         from: 'date' },
+  { column: 'From',         from: 'fromName' },
+  { column: 'To',           from: 'toName' },
+  { column: 'Last Line',    event: 'LAST_LINE' },
+  { column: 'I-210 Bridge', event: 'BR210' },
+  { column: 'ICW',          event: 'ICW' },
+  { column: '60 Beacon',    event: 'B60' },
+  { column: '36 Buoy',      event: 'B36' },
+  { column: 'CC Buoy',      event: 'CC' },
+  { column: 'First Line',   event: 'FIRST_LINE' },
+  { column: 'All Fast',     event: 'ALL_FAST' }
+];
+
+function journalUrl() { return (Store.get(JOURNAL_URL_KEY, '') || '').trim(); }
+
+/** An Airtable shared form link, roughly — enough to catch a wrong paste. */
+function looksLikeAirtableForm(url) {
+  const u = (url || '').trim();
+  if (!u) return false;
+  return /^https:\/\/(www\.)?airtable\.com\/(embed\/)?(app|shr)[A-Za-z0-9]/i.test(u);
+}
+
+/**
+ * Build the record from a COMPLETED trip. Uses the actual recorded times the
+ * Trip Log already holds — never a forecast ETA — and leaves a column blank
+ * where the event did not happen or was not logged.
+ */
+function journalRecord(trip) {
+  const out = {};
+  for (const m of JOURNAL_MAP) {
+    let v = '';
+    if (m.event) {
+      const e = trip.events && trip.events[m.event];
+      // The stored stamp carries its own zone, so a passage across midnight
+      // still shows the time actually recorded.
+      v = e ? fmtClock(e.epoch, e.tz || TZ()) : '';
+    } else if (m.from === 'date') {
+      v = tripDateLine(trip);
+    } else if (m.from === 'number') {
+      v = String(trip.number == null ? '' : trip.number);
+    } else {
+      v = String(trip[m.from] == null ? '' : trip[m.from]).trim();
+    }
+    out[m.column] = v;
+  }
+  return out;
+}
+
+function journalLink(trip, formUrl) {
+  const base = (formUrl != null ? formUrl : journalUrl()).trim();
+  if (!base) return null;
+  const rec = journalRecord(trip);
+  const parts = [];
+  for (const [name, value] of Object.entries(rec)) {
+    if (value === '') continue;                 // blank stays blank
+    parts.push(`prefill_${encodeURIComponent(name)}=${encodeURIComponent(value)}`);
+  }
+  const sep = base.includes('?') ? '&' : '?';
+  return parts.length ? base + sep + parts.join('&') : base;
+}
+
+/* A clearly-labelled sample, so the pilot can prove the columns line up
+   without committing a real trip to the journal. */
+function journalTestTrip() {
+  return {
+    number: 'TEST', ship: 'TEST VESSEL',
+    fromName: 'TEST FROM', toName: 'TEST TO',
+    completedAt: Date.now(),
+    events: Object.fromEntries(JOURNAL_MAP.filter(m => m.event).map((m, i) =>
+      [m.event, { epoch: wallToEpoch(2026, 1, 1, 12, i, TZ()), tz: TZ() }]))
+  };
+}
+
+/* ---- journal status, tracked separately from trip completion ----
+   Opening the form is not proof of submission, so the app never claims a trip
+   was saved to the journal. Phase 2 (a server holding the Airtable
+   credential) is the only way to earn that, and would set state 'SAVED'. */
+const JOURNAL_STATE = { NONE: 'NONE', OPENED: 'OPENED', SAVED: 'SAVED' };
+
+function journalStatus(trip) {
+  const j = trip && trip.journal;
+  if (!j || !j.state) return { state: JOURNAL_STATE.NONE, label: 'Not saved to journal' };
+  if (j.state === JOURNAL_STATE.SAVED)
+    return { state: JOURNAL_STATE.SAVED, label: 'Saved to journal', at: j.at };
+  return { state: JOURNAL_STATE.OPENED, label: 'Journal form opened',
+           at: j.at, count: j.count || 1 };
+}
+
+function markJournalOpened(tripNumber) {
+  const d = tripStore();
+  const t = d.trips.find(x => String(x.number) === String(tripNumber));
+  if (!t) return null;
+  t.journal = { state: JOURNAL_STATE.OPENED, at: Date.now(),
+                count: ((t.journal && t.journal.count) || 0) + 1 };
+  tripSave(d);
+  return t.journal;
+}
+
 const TRIP_KEY = 'tripLog';
 
 function tripStore() {
@@ -6648,6 +6777,26 @@ function renderAdmin() {
     </div>
 
     <div class="adminsec">
+      <p class="eyebrow">Airtable trip journal</p>
+      <p style="font-size:12.5px;color:var(--dim);margin:0 0 12px;line-height:1.55">
+        Create an Airtable table and form with the required fields, then paste the shared
+        form URL below. Completed trips can then be opened as prefilled journal entries.
+        Your own base — nothing is shared, and no Airtable password or key is stored here.</p>
+      <div class="field" style="margin-bottom:8px"><label for="aJournal">Trip journal form URL</label>
+        <input class="control" id="aJournal" type="url" inputmode="url"
+          value="${esc(journalUrl())}" placeholder="https://airtable.com/app…/pag…/form"></div>
+      <span id="aJournalMsg" style="font-size:12px;color:var(--dim)"></span>
+      <button class="btn" id="aJournalTest" style="margin-top:10px">Test journal</button>
+      <p style="font-size:11.5px;color:var(--faint);margin:8px 0 0;line-height:1.5">
+        Test journal opens the form with obvious sample values — Trip Number TEST, Ship Name
+        TEST VESSEL — so you can check every column lands correctly before relying on it.
+        Delete the test record from Airtable afterwards.</p>
+      <p style="font-size:11.5px;color:var(--faint);margin:10px 0 0;line-height:1.5">
+        Required columns, named exactly:<br>
+        <span style="font-family:var(--mono);color:var(--dim)">${JOURNAL_MAP.map(m => esc(m.column)).join(' · ')}</span></p>
+    </div>
+
+    <div class="adminsec">
       <p class="eyebrow">Office check-in number</p>
       <div class="field" style="margin-bottom:8px"><label for="aOffice">Number</label>
         <input class="control" id="aOffice" type="tel" inputmode="tel"
@@ -6736,6 +6885,23 @@ function renderAdmin() {
     Store.set('speedOverrides', {});
     applySpeedOverrides();
     renderAdmin();
+  });
+  $('#aJournal').addEventListener('change', e => {
+    const v = (e.target.value || '').trim();
+    if (v && !looksLikeAirtableForm(v)) {
+      // Warn rather than silently accept something that will never work.
+      $('#aJournalMsg').textContent = ' That does not look like an Airtable shared form URL — not saved.';
+      return;
+    }
+    Store.set(JOURNAL_URL_KEY, v);
+    $('#aJournalMsg').textContent = v ? ' Saved.' : ' Cleared.';
+  });
+  $('#aJournalTest').addEventListener('click', () => {
+    if (!journalUrl()) { $('#aJournalMsg').textContent = ' Add the form URL first.'; return; }
+    if (navigator.onLine === false) { $('#aJournalMsg').textContent = ' Needs an internet connection.'; return; }
+    // Sample values only — never a real trip, and nothing is recorded locally.
+    window.open(journalLink(journalTestTrip()), '_blank');
+    $('#aJournalMsg').textContent = ' Test form opened — check every column, then delete the test record.';
   });
   $('#aOffice').addEventListener('change', e => {
     const raw = (e.target.value || '').trim();
@@ -8122,7 +8288,77 @@ async function shareText(filename, mime, text) {
 /* ---------------------------------------------------------------------------
    TRIP LOG: VIEW
    ------------------------------------------------------------------------- */
-const TRIPUI = { editing: null, editTime: null, msg: null, msgOk: false, reviewing: false, open: null };
+const TRIPUI = { editing: null, editTime: null, msg: null, msgOk: false,
+                 reviewing: false, open: null, reopen: null, needsSetup: false };
+
+/* Opening the journal form. Trip completion never depends on this succeeding:
+   the trip is already saved locally before any of it runs. */
+async function openJournal(trip, opts) {
+  opts = opts || {};
+  if (!journalUrl()) {
+    TRIPUI.msg = 'Trip Journal is not configured.'; TRIPUI.msgOk = false;
+    TRIPUI.needsSetup = true; renderTrip(); return;
+  }
+  if (navigator.onLine === false) {
+    TRIPUI.msg = 'Journal requires an internet connection. The trip is saved on this device — come back and tap Save to journal later.';
+    TRIPUI.msgOk = false; renderTrip(); return;
+  }
+  const status = journalStatus(trip);
+  // Warn once, but never block: they may have closed Airtable without submitting.
+  if (status.state === JOURNAL_STATE.OPENED && !opts.again) {
+    TRIPUI.reopen = String(trip.number); renderTrip(); return;
+  }
+  const link = journalLink(trip);
+  if (!link) { TRIPUI.msg = 'Could not build the journal link.'; TRIPUI.msgOk = false; renderTrip(); return; }
+  window.open(link, '_blank');
+  markJournalOpened(trip.number);
+  TRIPUI.reopen = null;
+  TRIPUI.msg = 'Airtable form opened — review it and tap Submit there. The app cannot confirm the submission.';
+  TRIPUI.msgOk = true;
+  renderTrip();
+}
+
+function journalBlockHtml(trip) {
+  const st = journalStatus(trip);
+  const configured = !!journalUrl();
+  const num = esc(String(trip.number));
+
+  if (!configured) {
+    return `<div class="jbox">
+      <div class="jline"><span class="jok">✓ Saved on this device</span></div>
+      <div class="jstate">Trip Journal is not configured.</div>
+      <button class="btn" id="jSetup">Set up journal</button>
+    </div>`;
+  }
+  if (TRIPUI.reopen === String(trip.number)) {
+    return `<div class="jbox">
+      <div class="jline"><span class="jok">✓ Saved on this device</span></div>
+      <div class="jwarn">Journal form was already opened for this trip.
+        Opening it again may create a second record if you submitted the first.</div>
+      <button class="generate" id="jAgain" style="padding:15px">Open again</button>
+      <button class="btn" id="jCancel" style="margin-top:8px">Cancel</button>
+    </div>`;
+  }
+  const stateLine = st.state === JOURNAL_STATE.SAVED
+    ? `<span class="jok">✓ Saved to journal</span>`
+    : st.state === JOURNAL_STATE.OPENED
+      ? `<span class="jpend">Journal form opened ${fmtClock(st.at, TZ())} — submission not confirmed</span>`
+      : `<span class="jnone">Not saved to journal</span>`;
+  return `<div class="jbox">
+    <div class="jline"><span class="jok">✓ Saved on this device</span></div>
+    <div class="jline">${stateLine}</div>
+    <button class="${st.state === JOURNAL_STATE.NONE ? 'generate' : 'btn'}" id="jSave"
+      ${st.state === JOURNAL_STATE.NONE ? 'style="padding:15px;width:100%"' : ''}>${
+      st.state === JOURNAL_STATE.NONE ? 'Save to journal' : 'Open journal form again'}</button>
+  </div>`;
+}
+
+function bindJournal(trip) {
+  if ($('#jSave')) $('#jSave').addEventListener('click', () => openJournal(trip));
+  if ($('#jAgain')) $('#jAgain').addEventListener('click', () => openJournal(trip, { again: true }));
+  if ($('#jCancel')) $('#jCancel').addEventListener('click', () => { TRIPUI.reopen = null; renderTrip(); });
+  if ($('#jSetup')) $('#jSetup').addEventListener('click', () => { renderAdmin(); show('viewAdmin'); });
+}
 
 function tripTimeInput(epoch) {
   return epoch ? fmtClock(epoch, TZ()) : fmtClock(Date.now(), TZ());
@@ -8154,9 +8390,19 @@ function renderTrip() {
           <span>${e ? fmtClock(e.epoch, e.tz || TZ()) : 'Not logged'}</span></span></div>`;
       }).join('')}
       <div class="rule"></div>
+      <p class="eyebrow">Trip ${esc(String(t.number))} completed</p>
+      <div class="jhead">${t.ship && t.ship.trim() ? esc(t.ship) + '<br>' : ''}${esc(t.fromName)} → ${esc(t.toName)}</div>
+      ${journalBlockHtml(t)}
+      <div class="rule"></div>
       <button class="btn" id="trShare">Save / share trip log</button>
-      <div class="foot">Times shown are actual recorded times, not ETAs.</div>`;
-    $('#trBack').addEventListener('click', () => { TRIPUI.open = null; TRIPUI.msg = null; renderTrip(); });
+      <div class="foot">Times shown are actual recorded times, not ETAs.<br><br>
+        Saving on this device and saving to the journal are different things. The journal
+        form opens prefilled; nothing reaches Airtable until you tap Submit there, and the
+        app cannot confirm that you did.</div>`;
+    $('#trBack').addEventListener('click', () => {
+      TRIPUI.open = null; TRIPUI.msg = null; TRIPUI.reopen = null; renderTrip();
+    });
+    bindJournal(t);
     $('#trShare').addEventListener('click', async () => {
       const r = await shareText(`trip-${t.number}.txt`, 'text/plain', tripToText(t));
       TRIPUI.msg = r === 'shared' ? 'Shared.' : r === 'downloaded' ? 'Saved to your downloads.'
@@ -8227,9 +8473,12 @@ function renderTrip() {
         sets the next trip number to ${(parseInt(a.number,10)||0)+1}.</p>`;
     $('#trBackEdit').addEventListener('click', () => { TRIPUI.reviewing = false; renderTrip(); });
     $('#trDone').addEventListener('click', () => {
-      const done = tripComplete();
+      const done = tripComplete();     // local save first, always
       TRIPUI.reviewing = false;
-      TRIPUI.msg = `Trip ${done.number} saved.`; TRIPUI.msgOk = true;
+      TRIPUI.msg = journalUrl()
+        ? `Trip ${done.number} saved on this device.`
+        : `Trip ${done.number} saved on this device. Trip Journal is not configured.`;
+      TRIPUI.msgOk = true;
       TRIPUI.open = String(done.number);
       renderTrip();
     });
@@ -8532,11 +8781,17 @@ function tripHistoryHtml(d) {
     <p class="gapnote">No completed trips yet.</p>`;
   return `<div class="rule"></div>
     <p class="eyebrow">Trip log</p>
-    ${d.trips.slice(0, 40).map(t => `<div class="cprep">
-      <span class="cprepl"><b>Trip ${esc(String(t.number))}</b>
-        <span>${t.ship && t.ship.trim() ? esc(t.ship) + ' · ' : ''}${esc(t.fromName)} → ${esc(t.toName)} · ${esc(tripDateLine(t))}</span></span>
-      <button class="btn" data-topen="${esc(String(t.number))}">Open</button>
-    </div>`).join('')}
+    ${d.trips.slice(0, 40).map(t => {
+      const st = journalStatus(t);
+      const cls = st.state === JOURNAL_STATE.SAVED ? 'jok'
+                : st.state === JOURNAL_STATE.OPENED ? 'jpend' : 'jnone';
+      return `<div class="cprep">
+        <span class="cprepl"><b>Trip ${esc(String(t.number))}</b>
+          <span>${t.ship && t.ship.trim() ? esc(t.ship) + ' · ' : ''}${esc(t.fromName)} → ${esc(t.toName)} · ${esc(tripDateLine(t))}</span>
+          <span class="jrow">Saved locally ✓ · <span class="${cls}">${esc(st.label)}</span></span></span>
+        <button class="btn" data-topen="${esc(String(t.number))}">Open</button>
+      </div>`;
+    }).join('')}
     <button class="btn" id="trExportAll" style="margin-top:12px">Export all trips (CSV)</button>
     <p style="font-size:11.5px;color:var(--faint);margin:8px 0 0;line-height:1.5">
       Trips are stored on this device only. Clearing Safari website data deletes them, and
