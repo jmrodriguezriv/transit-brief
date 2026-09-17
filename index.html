@@ -3090,6 +3090,23 @@ function solveTransit(opts) {
   const { outbound, route, legs } = buildLegs(opts.fromId, opts.toId, ch, condition);
   const dirSign = outbound ? -1 : 1;
   const speedOverride = opts.speedOverride || null;
+
+  /* A personalised speed replaces the table speed for the leg. Every speed
+     path below reads leg.defaultSpeed, so substituting it here is enough, and
+     an explicit speedOverride still wins. */
+  if (opts.speedModel && speedOverride == null) {
+    for (let li = 0; li < legs.length; li++) {
+      const leg = legs[li];
+      const m = opts.speedModel(leg, li, legs);
+      if (m && isFinite(m.stw) && m.stw > 0) {
+        leg.baselineSpeed = leg.defaultSpeed;
+        leg.defaultSpeed = m.stw;
+        leg.speedBasis = m;
+        // learned from speed over ground: the current is already inside it
+        leg.speedIsGround = !!m.carriesCurrent;
+      }
+    }
+  }
   const currentAt = opts.currentAt || (() => null);
   const applyCurrent = opts.applyCurrent !== false;
 
@@ -3110,7 +3127,10 @@ function solveTransit(opts) {
       const stw = speedOverride != null ? speedOverride : leg.defaultSpeed;
       let sog = stw;
       let cur = null;
-      if (applyCurrent && leg.currentKey) {
+      /* A learned value derived from speed OVER GROUND already contains the
+         current that was running when it was measured; applying the forecast
+         current to it would count current twice. */
+      if (applyCurrent && leg.currentKey && !leg.speedIsGround) {
         // Sample at the leg's provisional midpoint time.
         const t0 = next[i];
         const guessDur = (leg.distanceNm / Math.max(stw, 0.5)) * HOUR;
@@ -3166,7 +3186,10 @@ function solveTransit(opts) {
         const leg = legs[i];
         const stw = speedOverride != null ? speedOverride : leg.defaultSpeed;
         let sog = stw;
-        if (applyCurrent && leg.currentKey) {
+        /* A learned value derived from speed OVER GROUND already contains the
+           current that was running when it was measured. Applying the forecast
+           current to it would count current twice, so it is used as-is. */
+        if (applyCurrent && leg.currentKey && !leg.speedIsGround) {
           const guess = (leg.distanceNm / Math.max(stw, 0.5)) * HOUR;
           const tMid = forward ? (forward[i] + (forward[i + 1] - forward[i]) / 2) : t + guess / 2;
           const cur = currentAt(leg.currentKey, tMid);
@@ -3315,6 +3338,7 @@ function reviseTransit(transit, snap, nowEpoch, opts) {
 
   const advance = (leg, nm, isCurrent) => {
     const stw = speedFor(leg, isCurrent);
+    if (leg.speedIsGround) return (nm / Math.max(stw, 1)) * HOUR;
     let sog = stw;
     if (!isCurrent || !(opts.observedSog > 0.5)) {
       const cur = currentAt(leg.currentKey, t + (nm / Math.max(stw, 0.5)) * HOUR / 2);
@@ -4825,6 +4849,683 @@ function officeStatus(step, trip, tz) {
    Field names are fixed and match the CSV export columns, so every pilot
    builds an identical base and only the form URL differs per phone.
    ======================================================================= */
+/* =========================================================================
+   ADAPTIVE ETA — learning from recorded passages
+   Observations are DERIVED from completed trips each time they are needed,
+   never accumulated in a separate log. Editing or deleting a report therefore
+   changes the model automatically and cannot double-count a trip.
+
+   Only recorded actual times train the model. An ETA is never training data.
+   ======================================================================= */
+const LEARN_KEY = 'learnSettings';
+const LEARN_MIN_NM = 0.5;          // below this, timing noise swamps the signal
+const LEARN_MIN_KTS = 0.5;         // outside these, treat as a bad observation
+const LEARN_MAX_KTS = 18.0;
+/* A transit can legitimately be slow — adverse current, traffic, fog. It is
+   only treated as holding or docking when it takes far longer than the table
+   would ever predict. Generous on purpose: a genuinely slow passage is real
+   data, and discarding it would teach the model the river is faster than it
+   is. */
+const LEARN_SLOW_FACTOR = 2.5;
+const LEARN_BLEND_K = 4;           // trips needed before the learned value carries half the weight
+const LEARN_DRAFT_BAND_FT = 3.0;   // comparable draft
+const LEARN_MIN_FOR_BAND = 3;      // observations needed before a draft band is trusted
+const LEARN_CURRENT_BAND_KTS = 0.75;
+
+function learnSettings() {
+  const d = Store.get(LEARN_KEY, {});
+  return { enabled: d.enabled !== false, ...d };
+}
+function learnSetSetting(k, v) {
+  const d = Store.get(LEARN_KEY, {}); d[k] = v; Store.set(LEARN_KEY, d);
+}
+
+/** Legs of the route a trip actually ran, cached per from/to pair. */
+const LEG_CACHE = {};
+function routeLegs(fromId, toId, condition) {
+  const key = fromId + '>' + toId + '|' + (condition === LIGHT ? 'L' : 'F');
+  if (!LEG_CACHE[key]) {
+    try { LEG_CACHE[key] = buildLegs(fromId, toId, CHANNEL, condition); }
+    catch (e) { LEG_CACHE[key] = null; }
+  }
+  return LEG_CACHE[key];
+}
+
+/**
+ * Turn one completed trip into speed observations.
+ * Each observation spans consecutive RECORDED events — if intermediate
+ * waypoints were not reported, the span covers all of them and is marked as
+ * such. No speed is invented for the unreported sections.
+ */
+function tripObservations(trip) {
+  const out = [];
+  if (!trip || !trip.events || trip.excludeFromLearning) return out;
+  const legs = routeLegs(trip.fromId, trip.toId, trip.condition === 'LIGHT' ? LIGHT : LOADED);
+  if (!legs || !legs.route) return out;
+
+  const order = legs.route.map(p => p.id);
+  // cumulative distance to each waypoint along the route actually run
+  const cum = [0];
+  for (let i = 0; i < legs.legs.length; i++) cum.push(cum[i] + legs.legs[i].distanceNm);
+
+  // recorded events that sit on this route, in route order
+  const pts = [];
+  for (const [key, e] of Object.entries(trip.events)) {
+    if (!e || e.epoch == null) continue;
+    const ev = TRIP_EVENTS.find(x => x.key === key);
+    if (!ev || !ev.nodeId) continue;              // manual events have no position
+    const idx = order.indexOf(ev.nodeId);
+    if (idx < 0) continue;
+    if (e.excludeFromLearning) continue;
+    pts.push({ key, idx, epoch: e.epoch, cond: e.cond || null, nm: cum[idx] });
+  }
+  pts.sort((a, b) => a.idx - b.idx);
+
+  for (let i = 1; i < pts.length; i++) {
+    const A = pts[i - 1], B = pts[i];
+    const nm = Math.abs(B.nm - A.nm);
+    const ms = B.epoch - A.epoch;
+    const o = {
+      tripNumber: trip.number, from: A.key, to: B.key,
+      distanceNm: nm, elapsedMs: ms,
+      skipped: (B.idx - A.idx) > 1,
+      reaches: legs.legs.slice(Math.min(A.idx, B.idx), Math.max(A.idx, B.idx)).map(l => l.zone),
+      /* Checkpoints sit 10-15 nm apart, so a span normally crosses several
+         reaches. The measured average belongs to the SPAN, not to any one
+         reach inside it — splitting it between them would be inventing
+         section speeds that were never observed. */
+      span: A.key + '>' + B.key,
+      fromNode: order[A.idx], toNode: order[B.idx],
+      outbound: trip.outbound != null ? !!trip.outbound : null,
+      draftFt: (B.cond && B.cond.draftFt != null) ? B.cond.draftFt
+             : (A.cond && A.cond.draftFt != null) ? A.cond.draftFt
+             : (trip.draftFt != null ? trip.draftFt : null),
+      flags: []
+    };
+
+    // What the table would have predicted across the same span.
+    const covered = legs.legs.slice(Math.min(A.idx, B.idx), Math.max(A.idx, B.idx));
+    let planHrs = 0;
+    for (const l of covered) planHrs += l.distanceNm / Math.max(l.defaultSpeed, 1);
+    o.plannedMs = planHrs * HOUR;
+
+    if (ms <= 0) o.flags.push(ms === 0 ? 'duplicate timestamp' : 'times run backwards');
+    else if (nm < LEARN_MIN_NM) o.flags.push('too short to time reliably');
+    else {
+      o.sogKts = nm / (ms / HOUR);
+      if (o.sogKts < LEARN_MIN_KTS) o.flags.push('implausibly slow');
+      if (o.sogKts > LEARN_MAX_KTS) o.flags.push('implausibly fast');
+      if (planHrs > 0 && ms > o.plannedMs * LEARN_SLOW_FACTOR)
+        o.flags.push('took ' + (ms / o.plannedMs).toFixed(1) +
+          '× the planned time — holding, traffic or docking?');
+    }
+
+    /* Speed over ground already contains the current, so the current is
+       removed here to leave speed through the water, and the forecast current
+       is re-applied when predicting. Adding current to a historical SOG would
+       count it twice. */
+    /* Current across the interval.
+       What is actually held is a reading at each checkpoint — one at each end
+       of a 10-15 nm stretch that may take well over an hour. The mean of the
+       two endpoints is an APPROXIMATION of the average current the ship met,
+       not a measurement of it: the current turns mid-passage, and the gauges
+       are up to 30 nm from parts of the span. Speed through the water derived
+       from it is therefore INFERRED, never measured, and it is given less
+       weight than a reading that bracketed the interval closely. */
+    const cA = A.cond && A.cond.current, cB = B.cond && B.cond.current;
+    if (o.sogKts != null && (cA || cB)) {
+      const vals = [cA, cB].filter(Boolean).map(c => c.signedKts);
+      const mean = vals.reduce((x, y) => x + y, 0) / vals.length;
+      const along = o.outbound ? -mean : mean;   // outbound runs down-chainage
+      o.currentKts = along;
+      o.stwKts = o.sogKts - along;
+      o.stwInferred = true;
+      o.currentKnown = true;
+      o.currentEndpoints = vals.length;          // 1 = one end only, 2 = both
+      o.currentSpreadKts = vals.length === 2 ? Math.abs(vals[0] - vals[1]) : null;
+      o.currentStations = [cA, cB].filter(Boolean)
+        .map(c => (c.stations || []).join('+')).filter(Boolean);
+      o.currentObserved = !!((cA && cA.observed) || (cB && cB.observed));
+      /* HEURISTIC WEIGHTS — not measured or validated confidence levels. They
+         are judgement calls about how much a current correction deserves to
+         count, chosen to be cautious, and they should be revisited once real
+         passages exist to test them against.
+
+         Two endpoint readings that agree do NOT establish that the current was
+         steady across the whole span: both could be near a turn, or both drawn
+         from one station far from the middle of the stretch. So agreement is
+         only one of three terms — the others are how far the station is from
+         the water in question, and how long the span is relative to a tidal
+         cycle. */
+      const endpointTerm = vals.length === 2
+        ? (o.currentSpreadKts > 1.0 ? 0.4 : o.currentSpreadKts > 0.5 ? 0.7 : 1.0)
+        : 0.5;                                   // one end only
+      const dists = [cA, cB].filter(Boolean)
+        .map(c => c.gaugeDistanceNm).filter(d => d != null);
+      const farNm = dists.length ? Math.max(...dists) : null;
+      const distanceTerm = farNm == null ? 0.6    // distance unknown: assume weak
+        : farNm <= 5 ? 1.0 : farNm <= 12 ? 0.75 : farNm <= 25 ? 0.5 : 0.3;
+      /* A span occupying much of a tidal cycle will have met a current that
+         changed sign; endpoint readings cannot describe that. */
+      const cycleShare = Math.min(1, (ms / HOUR) / 6.2);
+      const durationTerm = cycleShare < 0.25 ? 1.0 : cycleShare < 0.5 ? 0.7 : 0.45;
+
+      o.currentConfidence = endpointTerm * distanceTerm * durationTerm;
+      o.currentTerms = { endpointTerm, distanceTerm, durationTerm,
+                         gaugeDistanceNm: farNm, hours: ms / HOUR };
+      o.currentApprox = true;
+    } else {
+      o.currentKnown = false;
+      o.stwInferred = false;
+    }
+
+    /* An anchor logged before the ICW remap may have been recorded against
+       Light 91/92 while the pilot was at the Devils Elbow entrance. Those
+       spans are ambiguous and are not used. */
+    if ((A.key === 'ICW' || B.key === 'ICW') && trip.preIcwRemap) {
+      o.flags.push('ICW mapping ambiguous for this trip');
+    }
+
+    /* What this observation is evidence about: the exact span when it crosses
+       more than one reach, or the reach itself when it sits inside one. */
+    const distinct = [...new Set(o.reaches)];
+    o.key = distinct.length === 1 ? distinct[0] : 'span:' + o.span;
+    o.reachCount = distinct.length;
+
+    o.usable = o.flags.length === 0 && o.sogKts != null;
+    out.push(o);
+  }
+  return out;
+}
+
+/** Every usable observation across the saved trips, newest last. */
+function allObservations(trips) {
+  const list = trips || tripStore().trips || [];
+  const out = [];
+  for (const t of list) for (const o of tripObservations(t)) out.push(o);
+  return out;
+}
+
+function median(xs) {
+  if (!xs.length) return null;
+  const s = xs.slice().sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+
+/**
+ * A personalised speed for one reach, in one direction, under given
+ * conditions. Deliberately simple and explainable: a median of comparable
+ * passages, pulled toward the table speed in proportion to how little
+ * comparable history exists.
+ *
+ * Returns { stw, basis, n, spreadKts, baseline } or null to use the table.
+ */
+function learnedSpeed(reach, outbound, draftFt, condition, obs) {
+  const pool = (obs || allObservations()).filter(o =>
+    o.usable && o.key === reach &&
+    (o.outbound == null || o.outbound === !!outbound));
+  if (!pool.length) return null;
+
+  /* Draft selection, in tiers. A deep ship and a light one do not run the
+     same water at the same speed, so close drafts are preferred; the band is
+     widened, then dropped, only when there is too little history to be picky.
+     Which tier was used is reported, because a prediction drawn from a very
+     different draft deserves less confidence. */
+  const near = d => pool.filter(o =>
+    o.draftFt != null && draftFt != null && Math.abs(o.draftFt - draftFt) <= d);
+  let use, draftTier, draftBandFt = null;
+  if (draftFt == null) { use = pool; draftTier = 'draft unknown for this passage'; }
+  else if (near(LEARN_DRAFT_BAND_FT).length >= LEARN_MIN_FOR_BAND) {
+    use = near(LEARN_DRAFT_BAND_FT); draftTier = 'comparable draft'; draftBandFt = LEARN_DRAFT_BAND_FT;
+  } else if (near(LEARN_DRAFT_BAND_FT * 2).length >= LEARN_MIN_FOR_BAND) {
+    use = near(LEARN_DRAFT_BAND_FT * 2); draftTier = 'wider draft range'; draftBandFt = LEARN_DRAFT_BAND_FT * 2;
+  } else {
+    use = pool; draftTier = 'all drafts — too little comparable history';
+  }
+  if (!use.length) use = pool;
+
+  /* Through-the-water and over-ground observations are never mixed: one has
+     had the current removed and one has not, so averaging them would blur a
+     real difference and leave no honest way to apply a forecast current.
+     One set is chosen, on EFFECTIVE sample size rather than raw count, so a
+     handful of weakly-corrected observations cannot displace a larger body of
+     reliable over-ground ones. Through-water is preferred only when it is
+     genuinely better supported, because it alone transfers to a different
+     current. */
+  const withStw = use.filter(o => o.currentKnown && o.stwKts != null &&
+    o.stwKts > LEARN_MIN_KTS && o.stwKts < LEARN_MAX_KTS);
+  const withSog = use.filter(o => !o.currentKnown && o.sogKts != null);
+
+  const draftRelevance = o => {
+    if (draftFt == null || o.draftFt == null) return 0.7;   // unknown: partial credit
+    const d = Math.abs(o.draftFt - draftFt);
+    return d <= LEARN_DRAFT_BAND_FT ? 1.0 : d <= LEARN_DRAFT_BAND_FT * 2 ? 0.7 : 0.4;
+  };
+  /* Both kinds are discounted for how they handle current, so the comparison
+     is like for like. A through-water value carries a QUANTIFIED uncertainty
+     in its correction; an over-ground value carries an entirely UNKNOWN
+     current, which is the larger unknown of the two and is penalised as such.
+     Heuristic again — a judgement call, not a measured figure. */
+  const SOG_UNKNOWN_CURRENT_PENALTY = 0.6;
+  const effective = (set, sog) => set.reduce((x, o) =>
+    x + draftRelevance(o) * (sog ? SOG_UNKNOWN_CURRENT_PENALTY
+                                 : (o.currentConfidence != null ? o.currentConfidence : 0.5)), 0);
+
+  const effStw = effective(withStw, false), effSog = effective(withSog, true);
+  /* Through-water is preferred on comparable support because it alone
+     transfers to a different current; a clearly better supported over-ground
+     body still wins. */
+  const kind = (!withStw.length && !withSog.length) ? null
+             : !withSog.length ? 'stw'
+             : !withStw.length ? 'sog'
+             : (effStw * 1.2 >= effSog ? 'stw' : 'sog');
+  if (!kind) return null;
+  const set = kind === 'stw' ? withStw : withSog;
+  const vals = set.map(o => kind === 'stw' ? o.stwKts : o.sogKts).filter(v => v != null);
+  if (!vals.length) return null;
+
+  const learned = median(vals);
+  const trips = new Set(set.map(o => o.tripNumber)).size;
+  const spread = vals.length > 2
+    ? (median(vals.map(v => Math.abs(v - learned))) * 1.4826) : null;
+
+  /* An inferred through-water speed rests on an endpoint approximation of the
+     current, so it counts for less than a full observation. */
+  const conf = kind === 'stw'
+    ? set.reduce((x, o) => x + (o.currentConfidence != null ? o.currentConfidence : 0.5), 0) / set.length
+    : 1;
+
+  return { learned, kind, n: vals.length, trips, spreadKts: spread,
+           carriesCurrent: kind === 'sog',
+           inferredStw: kind === 'stw',
+           currentConfidence: conf,
+           draftTier, draftBandFt,
+           draftRange: set.map(o => o.draftFt).filter(d => d != null).length
+             ? [Math.min(...set.map(o => o.draftFt).filter(d => d != null)),
+                Math.max(...set.map(o => o.draftFt).filter(d => d != null))] : null,
+           discarded: { stw: withStw.length, sog: withSog.length,
+                        effStw: +effStw.toFixed(2), effSog: +effSog.toFixed(2), kind } };
+}
+
+/**
+ * The speed to plan a leg with, and an honest account of where it came from.
+ * With no history this is the table speed; with a little it is a blend; with
+ * enough it is mostly learned. One trip never moves it far.
+ */
+function legBaselineSpeed(leg, condition) {
+  const v = condition === LIGHT ? leg.speedLight : leg.speedLoaded;
+  return isFinite(v) && v > 0 ? v : leg.defaultSpeed;
+}
+
+function speedForLeg(leg, condition, draftFt, outbound, obs, key) {
+  const base = legBaselineSpeed(leg, condition);
+  if (!learnSettings().enabled) return { stw: base, basis: 'baseline', baseline: base, n: 0 };
+
+  const L = learnedSpeed(key || leg.zone, outbound, draftFt, condition, obs);
+  if (!L) return { stw: base, basis: 'baseline', baseline: base, n: 0 };
+
+  /* Learned weight n/(n+4); table weight 4/(n+4). More comparable history
+     raises the learned share. Weak evidence — an inferred through-water speed
+     resting on an endpoint current, or a draft drawn from a wider band —
+     lowers it again, so a shaky figure never carries a full vote. */
+  let w = L.trips / (L.trips + LEARN_BLEND_K);
+  const evidence = (L.currentConfidence != null ? L.currentConfidence : 1)
+    * (L.draftTier === 'comparable draft' || L.draftTier === 'draft unknown for this passage' ? 1
+       : L.draftTier === 'wider draft range' ? 0.8 : 0.6);
+  w *= evidence;
+  const stw = base * (1 - w) + L.learned * w;
+  return {
+    stw, baseline: base, learned: L.learned, weight: w, evidence,
+    /* Named by how much the learned value actually contributes. The evidence
+       discount caps the weight well below 1, so a 0.7 threshold could never be
+       reached by current-corrected history; half is the sensible line for
+       calling a prediction personalized. */
+    basis: w >= 0.5 ? 'personalized' : 'blended',
+    n: L.n, trips: L.trips, spreadKts: L.spreadKts,
+    kind: L.kind, carriesCurrent: L.carriesCurrent,
+    // how the evidence was selected and how far it can be trusted
+    inferredStw: L.inferredStw, currentConfidence: L.currentConfidence,
+    draftTier: L.draftTier, draftBandFt: L.draftBandFt, draftRange: L.draftRange,
+    discarded: L.discarded
+  };
+}
+
+/**
+ * A model bound to one passage's conditions, ready for solveTransit.
+ *
+ * A leg is priced by the most specific evidence available:
+ *   1. a span between two checkpoints that contains this leg — the average
+ *      actually measured across that stretch, applied uniformly to it;
+ *   2. failing that, a reach learned from spans that sat inside one reach;
+ *   3. failing that, the table speed.
+ * The span average is applied uniformly because that is all that was measured;
+ * no attempt is made to guess how it divided between the reaches inside it.
+ */
+function buildSpeedModel(input, outbound, route) {
+  if (!learnSettings().enabled) return null;
+  const obs = allObservations();
+  if (!obs.some(o => o.usable)) return null;         // nothing learned yet
+  const condition = input.condition || LOADED;
+  const draftFt = input.draftFt != null && isFinite(input.draftFt) ? input.draftFt : null;
+
+  /* Which planned span each leg falls inside, from this route's own
+     checkpoints — so a span learned on one route is only applied where the
+     same two checkpoints bracket the same water. */
+  const order = (route || []).map(p => p.id);
+  const cps = TRIP_EVENTS.filter(e => e.nodeId && order.includes(e.nodeId))
+    .map(e => ({ key: e.key, idx: order.indexOf(e.nodeId) }))
+    .sort((x, y) => x.idx - y.idx);
+  const spanForLeg = i => {
+    for (let k = 1; k < cps.length; k++)
+      if (i >= cps[k - 1].idx && i < cps[k].idx)
+        return 'span:' + cps[k - 1].key + '>' + cps[k].key;
+    return null;
+  };
+
+  /* A span's learned figure is a TOTAL for that stretch. Rather than flatten
+     every leg inside it to one speed — which would assert that a 5 kt reach and
+     a 10 kt reach run alike — the baseline proportions are kept and scaled by a
+     single factor so the span total matches what was measured. Intermediate
+     ETAs inside a span are therefore estimates; only the span endpoints carry
+     measured evidence. */
+  const spanCache = {};
+  const spanFactor = (spanKey, legs) => {
+    if (spanCache[spanKey] !== undefined) return spanCache[spanKey];
+    const idxs = legs.map((l, i) => i).filter(i => spanForLeg(i) === spanKey);
+    if (!idxs.length) return (spanCache[spanKey] = null);
+    const covered = idxs.map(i => legs[i]);
+    const nm = covered.reduce((x, l) => x + l.distanceNm, 0);
+    let baseHrs = 0;
+    for (const l of covered) baseHrs += l.distanceNm / Math.max(legBaselineSpeed(l, condition), 1);
+    const baseSpanSpeed = nm / Math.max(baseHrs, 1e-6);
+    const m = speedForLeg({ speedLoaded: baseSpanSpeed, speedLight: baseSpanSpeed,
+                            defaultSpeed: baseSpanSpeed, zone: spanKey },
+                          condition, draftFt, outbound, obs, spanKey);
+    if (m.basis === 'baseline') return (spanCache[spanKey] = null);
+    m.factor = m.stw / baseSpanSpeed;
+    m.spanNm = nm;
+    return (spanCache[spanKey] = m);
+  };
+
+  const model = (leg, legIndex, legs) => {
+    const spanKey = legIndex != null ? spanForLeg(legIndex) : null;
+    if (spanKey && legs) {
+      const sf = spanFactor(spanKey, legs);
+      if (sf) {
+        const base = legBaselineSpeed(leg, condition);
+        return { ...sf, stw: base * sf.factor, baseline: base,
+                 scope: 'span', spanKey,
+                 // the leg's own share of the span, kept proportional
+                 estimated: true };
+      }
+    }
+    const r = speedForLeg(leg, condition, draftFt, outbound, obs, leg.zone);
+    r.scope = r.basis === 'baseline' ? 'baseline' : 'reach';
+    return r;
+  };
+  model.summary = () => {
+    const usable = obs.filter(o => o.usable);
+    return { observations: usable.length,
+             trips: new Set(usable.map(o => o.tripNumber)).size };
+  };
+  return model;
+}
+
+/**
+ * Walk-forward evaluation. Each trip is predicted using ONLY the trips
+ * recorded before it, then compared against what actually happened. This is
+ * the only honest way to claim the learned model beats the table.
+ */
+function evaluateLearning(trips) {
+  const list = (trips || tripStore().trips || [])
+    .filter(t => t && t.events)
+    .slice()
+    .sort((a, b) => (a.completedAt || 0) - (b.completedAt || 0));
+
+  const rows = [];
+  for (let i = 0; i < list.length; i++) {
+    const trip = list[i];
+    const history = list.slice(0, i);                 // earlier trips only
+    const obs = allObservations(history).filter(o => o.usable);
+    const mine = tripObservations(trip).filter(o => o.usable);
+    if (!mine.length) continue;
+    const condition = trip.condition === 'LIGHT' ? LIGHT : LOADED;
+
+    for (const o of mine) {
+      const legs = routeLegs(trip.fromId, trip.toId, condition);
+      if (!legs) continue;
+      /* The table's own prediction for this span: distance over the
+         distance-weighted table speed across the legs it covers. */
+      const order = legs.route.map(p => p.id);
+      const iA = order.indexOf(o.fromNode), iB = order.indexOf(o.toNode);
+      if (iA < 0 || iB < 0) continue;
+      const covered = legs.legs.slice(Math.min(iA, iB), Math.max(iA, iB));
+      if (!covered.length) continue;
+      let tHrs = 0;
+      for (const l of covered) tHrs += l.distanceNm / Math.max(legBaselineSpeed(l, condition), 1);
+      const baseline = o.distanceNm / tHrs;          // span speed from the table
+      const leg = covered[0];
+      const m = speedForLeg(leg, condition, o.draftFt, o.outbound, obs, o.key);
+      /* The model scales the whole span by one factor, so compare at span
+         level: with no history the factor is 1 and the two predictions must be
+         identical, which is the only way the comparison is fair. */
+      const factor = m.stw / Math.max(legBaselineSpeed(leg, condition), 1e-6);
+      const modelSpanSpeed = baseline * factor;
+      const actualMin = o.elapsedMs / MIN;
+      // predicted time over the same distance, current re-applied where known
+      const cur = o.currentKnown ? o.currentKts : 0;
+      const baseSog = Math.max(baseline + cur, 1);
+      /* An over-ground learned value already contains a current, so none is
+         added to it — the same rule the solver follows. */
+      const persSog = Math.max(m.carriesCurrent ? modelSpanSpeed : modelSpanSpeed + cur, 1);
+      rows.push({
+        trip: trip.number, reach: o.reaches[0], distanceNm: o.distanceNm,
+        actualMin,
+        baselineErrMin: Math.abs((o.distanceNm / baseSog) * 60 - actualMin),
+        learnedErrMin: Math.abs((o.distanceNm / persSog) * 60 - actualMin),
+        basis: m.basis, trainedOn: m.trips || 0
+      });
+    }
+  }
+  if (!rows.length) return { rows: [], trips: 0, note: 'no completed trips with two or more recorded waypoints' };
+  const mean = xs => xs.reduce((a, b) => a + b, 0) / xs.length;
+  return {
+    rows,
+    trips: new Set(rows.map(r => r.trip)).size,
+    intervals: rows.length,
+    baselineMaeMin: mean(rows.map(r => r.baselineErrMin)),
+    learnedMaeMin: mean(rows.map(r => r.learnedErrMin))
+  };
+}
+
+/* =========================================================================
+   PREDICTION HISTORY
+   What the app said WOULD happen, written down before it did. Append-only:
+   recording an actual never rewrites a prediction, because the whole point is
+   to be able to check later whether the prediction was any good.
+
+   This is the prospective measurement. It is kept apart from the retrospective
+   walk-forward test, which re-predicts past trips and is a weaker form of
+   evidence.
+   ======================================================================= */
+const PREDICTION_CAP = 400;        // per trip, oldest dropped first
+
+/**
+ * Snapshot the ETAs for every checkpoint still ahead.
+ * @param transit   the solved passage, personalised if learning is on
+ * @param baseline  the same passage solved on the speed table alone
+ */
+function recordPredictions(transit, baseline, speedBasis) {
+  const d = tripStore();
+  if (!d.active || !transit) return;
+  const at = Date.now();
+  const list = d.active.predictions || [];
+  const anchors = Store.get('anchors', []);
+  const order = transit.waypoints.map(w => w.point.id);
+  const lastIdx = anchors.length ? order.indexOf(anchors[anchors.length - 1].nodeId) : -1;
+
+  for (const ev of TRIP_EVENTS) {
+    if (!ev.nodeId) continue;                       // manual events are not predicted
+    const i = order.indexOf(ev.nodeId);
+    if (i < 0 || i <= lastIdx) continue;            // not on this route, or already passed
+    if (d.active.events[ev.key]) continue;          // already happened: nothing to predict
+    const w = transit.waypoints[i];
+    const bw = baseline ? baseline.waypoints[i] : null;
+    const seen = list.some(p => p.eventKey === ev.key);
+    list.push({
+      at, eventKey: ev.key, nodeId: ev.nodeId, label: ev.label,
+      predictedEta: w.eta,
+      baselineEta: bw ? bw.eta : null,
+      basis: speedBasis ? speedBasis.basis : 'baseline',
+      supportingPassages: speedBasis ? (speedBasis.trips || 0) : 0,
+      supportingIntervals: speedBasis ? (speedBasis.observations || 0) : 0,
+      learnedShare: speedBasis ? (speedBasis.learnedShare || 0) : 0,
+      first: !seen                                  // the earliest call for this checkpoint
+    });
+  }
+  // keep the first prediction for each checkpoint even when trimming
+  if (list.length > PREDICTION_CAP) {
+    const firsts = list.filter(p => p.first);
+    const rest = list.filter(p => !p.first).slice(-(PREDICTION_CAP - firsts.length));
+    d.active.predictions = firsts.concat(rest).sort((a, b) => a.at - b.at);
+  } else {
+    d.active.predictions = list;
+  }
+  tripSave(d);
+}
+
+/**
+ * PROSPECTIVE accuracy: predictions written before the event, compared with
+ * what actually happened. This is real evidence about this app on this river.
+ */
+function prospectiveAccuracy(trips) {
+  const list = trips || [...(tripStore().trips || []),
+                         ...(tripStore().active ? [tripStore().active] : [])];
+  const rows = [];
+  for (const t of list) {
+    if (!t || !t.predictions || !t.events) continue;
+    for (const [key, e] of Object.entries(t.events)) {
+      if (!e || e.epoch == null) continue;
+      // only predictions made BEFORE the event occurred
+      const before = t.predictions.filter(p => p.eventKey === key && p.at < e.epoch);
+      if (!before.length) continue;
+      const earliest = before[0];
+      const latest = before[before.length - 1];
+      for (const [when, p] of [['earliest', earliest], ['latest', latest]]) {
+        if (p.predictedEta == null) continue;
+        rows.push({
+          trip: t.number, checkpoint: p.label, when,
+          leadMin: (e.epoch - p.at) / MIN,
+          predictedErrMin: Math.abs(p.predictedEta - e.epoch) / MIN,
+          baselineErrMin: p.baselineEta != null ? Math.abs(p.baselineEta - e.epoch) / MIN : null,
+          basis: p.basis, supportingPassages: p.supportingPassages
+        });
+      }
+    }
+  }
+  const pick = w => rows.filter(r => r.when === w);
+  const mean = xs => xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
+  const summarise = w => {
+    const rs = pick(w);
+    const withBase = rs.filter(r => r.baselineErrMin != null);
+    return { n: rs.length,
+      appMaeMin: mean(rs.map(r => r.predictedErrMin)),
+      baselineMaeMin: mean(withBase.map(r => r.baselineErrMin)),
+      comparable: withBase.length };
+  };
+  return { rows, kind: 'prospective',
+           trips: new Set(rows.map(r => r.trip)).size,
+           earliest: summarise('earliest'), latest: summarise('latest') };
+}
+
+/* =========================================================================
+   BACKUP
+   Everything the app has learned or recorded, in one file. The CSV and the
+   Airtable journal carry the times a person reads; this carries the parts a
+   person cannot retype — captured current, draft, exclusions and the
+   prediction history — so an app update, a cleared cache or a new phone does
+   not cost the learning.
+   ======================================================================= */
+const BACKUP_VERSION = 1;
+
+function buildBackup() {
+  const d = tripStore();
+  return {
+    format: 'calcasieu-transit-brief/backup',
+    version: BACKUP_VERSION,
+    exportedAt: new Date().toISOString(),
+    timezone: TZ(),
+    appNotes: 'Trips carry actual times with the conditions captured at the ' +
+              'moment they were logged, plus every ETA the app predicted before ' +
+              'the fact. Predictions are append-only and are never rewritten.',
+    trips: d.trips || [],
+    activeTrip: d.active || null,
+    nextTripNumber: d.nextNumber != null ? d.nextNumber : null,
+    settings: {
+      learning: Store.get(LEARN_KEY, {}),
+      speedOverrides: Store.get('speedOverrides', {}),
+      thresholds: Store.get('thresholds', null),
+      officeNumber: Store.get(OFFICE_NUMBER_KEY, ''),
+      journalFormUrl: Store.get(JOURNAL_URL_KEY, ''),
+      anchors: Store.get('anchors', []),
+      icwMigrated: Store.get('icwMigrated', false)
+    },
+    counts: (() => {
+      const all = [...(d.trips || []), ...(d.active ? [d.active] : [])];
+      const obs = allObservations(d.trips || []);
+      return {
+        trips: (d.trips || []).length,
+        activeTrip: d.active ? 1 : 0,
+        recordedTimes: all.reduce((n, t) => n + Object.keys(t.events || {}).length, 0),
+        observations: obs.length,
+        usableObservations: obs.filter(o => o.usable).length,
+        predictions: all.reduce((n, t) => n + ((t.predictions || []).length), 0)
+      };
+    })()
+  };
+}
+
+/**
+ * Restore. Merges by trip number rather than replacing wholesale, so a backup
+ * can be loaded onto a device that has since recorded more trips without
+ * losing either side. A trip already present is left alone unless the backup
+ * copy holds more recorded times.
+ */
+function restoreBackup(obj) {
+  if (!obj || obj.format !== 'calcasieu-transit-brief/backup')
+    return { ok: false, error: 'Not a Transit Brief backup file.' };
+  if (!(obj.version <= BACKUP_VERSION))
+    return { ok: false, error: 'That backup came from a newer version of the app.' };
+
+  const d = tripStore();
+  const byNum = {};
+  for (const t of d.trips || []) byNum[String(t.number)] = t;
+  let added = 0, merged = 0;
+  for (const t of obj.trips || []) {
+    const k = String(t.number);
+    const mine = byNum[k];
+    if (!mine) { byNum[k] = t; added++; continue; }
+    const mineN = Object.keys(mine.events || {}).length;
+    const theirsN = Object.keys(t.events || {}).length;
+    if (theirsN > mineN) { byNum[k] = t; merged++; }
+  }
+  d.trips = Object.values(byNum).sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0));
+  if (!d.active && obj.activeTrip) d.active = obj.activeTrip;
+  if (obj.nextTripNumber != null && (d.nextNumber == null || obj.nextTripNumber > d.nextNumber))
+    d.nextNumber = obj.nextTripNumber;
+  tripSave(d);
+
+  const st = obj.settings || {};
+  if (st.learning) Store.set(LEARN_KEY, st.learning);
+  if (st.speedOverrides) Store.set('speedOverrides', st.speedOverrides);
+  if (st.thresholds) Store.set('thresholds', st.thresholds);
+  if (st.officeNumber) Store.set(OFFICE_NUMBER_KEY, st.officeNumber);
+  if (st.journalFormUrl) Store.set(JOURNAL_URL_KEY, st.journalFormUrl);
+  if (st.icwMigrated != null) Store.set('icwMigrated', st.icwMigrated);
+  return { ok: true, added, merged, total: d.trips.length };
+}
+
 const JOURNAL_URL_KEY = 'journalFormUrl';
 
 /* ---------------------------------------------------------------------------
@@ -4997,11 +5698,61 @@ function tripStartActive(number, ship, transit) {
   return d.active;
 }
 
+/* Conditions as they were when the event was recorded. Captured at logging
+   time and never back-filled: attaching today's current to a past passage
+   would teach the model something that never happened. Anything unavailable
+   stays explicitly unknown rather than being guessed. */
+function captureConditions(key, epoch, trip) {
+  const ev = TRIP_EVENTS.find(e => e.key === key);
+  const out = { nodeId: ev && ev.nodeId ? ev.nodeId : null };
+
+  if (trip && trip.draftFt != null && isFinite(trip.draftFt)) out.draftFt = trip.draftFt;
+  else out.draftFt = null;
+
+  out.outbound = trip && trip.outbound != null ? !!trip.outbound : null;
+
+  /* Current along the channel at this position and time. The brief already
+     holds it; if there is no brief, or the point has no gauge within reach,
+     it stays null rather than borrowing a distant station. */
+  out.current = null;
+  if (out.nodeId && LAST && LAST.stops) {
+    const stop = LAST.stops.find(s => s.point.id === out.nodeId);
+    const c = stop && stop.cond ? stop.cond.current : null;
+    if (c && c.signedKts != null) {
+      /* How far the nearest current station is from this point. A harmonic
+         prediction 20 nm away describes different water, and that distance is
+         recorded so the correction can be weighted for it later. */
+      let gaugeNm = null;
+      const node = CHANNEL.nodes.find(n => n.id === out.nodeId);
+      if (node) {
+        for (const g of CHANNEL.gauges || []) {
+          if (!g.current) continue;
+          const d = Math.abs(g.chainNm - node.chainNm);
+          if (gaugeNm == null || d < gaugeNm) gaugeNm = d;
+        }
+      }
+      out.current = {
+        signedKts: c.signedKts,            // + = flood = toward increasing chainage
+        source: c.source || null,
+        stations: c.gauges || null,
+        observed: false,                   // these are harmonic predictions
+        gaugeDistanceNm: gaugeNm,
+        sampledFor: epoch
+      };
+    }
+  }
+  return out;
+}
+
 function tripSetEvent(key, epoch) {
   const d = tripStore();
   if (!d.active) return null;
   if (epoch == null) delete d.active.events[key];
-  else d.active.events[key] = tripStamp(epoch);
+  else {
+    const stamp = tripStamp(epoch);
+    stamp.cond = captureConditions(key, stamp.epoch, d.active);
+    d.active.events[key] = stamp;
+  }
   tripSave(d);                       // autosave on every change
   return d.active;
 }
@@ -5626,7 +6377,12 @@ function buildBrief(input) {
   const thresholds = Store.get('thresholds', DEFAULT_THRESHOLDS);
 
   // Pass 1: solve with no current so we know the rough window to fetch.
-  const rough = solveTransit({ fromId: input.fromId, toId: input.toId, sailEpoch: input.sailEpoch, applyCurrent: false, speedOverride: input.speedOverride, condition: input.condition, anchors: input.anchors });
+  const roughPlain = solveTransit({ fromId: input.fromId, toId: input.toId, sailEpoch: input.sailEpoch, applyCurrent: false, speedOverride: input.speedOverride, condition: input.condition, anchors: input.anchors });
+  const speedModel = buildSpeedModel(input, roughPlain.outbound,
+    roughPlain.waypoints.map(w => w.point));
+  const rough = speedModel
+    ? solveTransit({ fromId: input.fromId, toId: input.toId, sailEpoch: input.sailEpoch, applyCurrent: false, speedOverride: input.speedOverride, condition: input.condition, anchors: input.anchors, speedModel })
+    : roughPlain;
   const win = { start: input.sailEpoch - HOUR, end: rough.endEpoch + 2 * HOUR };
 
   /* Checked on the first solve, before any data is fetched or sampled. */
@@ -5654,7 +6410,7 @@ function buildBrief(input) {
     const transit = solveTransit({
       fromId: input.fromId, toId: input.toId, sailEpoch: input.sailEpoch,
       speedOverride: input.speedOverride, currentAt, condition: input.condition,
-      anchors: input.anchors
+      anchors: input.anchors, speedModel
     });
 
     // Per-waypoint conditions
@@ -6086,9 +6842,45 @@ function buildBrief(input) {
       alerts.push({ info: true, t: 'No tide data', d:
         `${noTide} of ${stops.length} waypoints lie beyond the tide gauges.` });
 
+    /* Computed once and used both for the prediction record and the brief. */
+    const briefSpeedBasis = (() => {
+               const legs = transit.legs || [];
+               const withBasis = legs.filter(l => l.speedBasis);
+               const sum = speedModel && speedModel.summary ? speedModel.summary() : { trips: 0, observations: 0 };
+               if (!withBasis.length) return { basis: 'baseline', trips: sum.trips || 0, observations: sum.observations || 0, learnedShare: 0 };
+               const total = withBasis.reduce((x, l) => x + l.distanceNm, 0) || 1;
+               const nmBy = { baseline: 0, blended: 0, personalized: 0 };
+               for (const l of withBasis) nmBy[l.speedBasis.basis] += l.distanceNm;
+               const learnedNm = nmBy.personalized + nmBy.blended;
+               const share = learnedNm / total;
+               const spreads = withBasis.filter(l => l.speedBasis.basis !== 'baseline')
+                 .map(l => l.speedBasis.spreadKts).filter(x => x != null);
+               return {
+                 basis: share < 0.15 ? 'baseline'
+                      : nmBy.personalized >= nmBy.blended ? 'personalized' : 'blended',
+                 learnedShare: share,
+                 legs: withBasis.length, nmBy,
+                 trips: sum.trips, observations: sum.observations,
+                 spreadKts: spreads.length ? median(spreads) : null,
+                 carriesCurrent: withBasis.some(l => l.speedBasis && l.speedBasis.carriesCurrent)
+               };
+             })();
+
+    /* Written before the passage happens, and never rewritten afterwards. */
+    const baselineTransit = speedModel ? solveTransit({
+      fromId: input.fromId, toId: input.toId, sailEpoch: input.sailEpoch,
+      speedOverride: input.speedOverride, currentAt, condition: input.condition,
+      anchors: input.anchors
+    }) : transit;
+    try { recordPredictions(transit, baselineTransit, briefSpeedBasis); } catch (e) { /* never block a brief */ }
+
     return { input, transit, stops, env, tideEvents, currentEvents, maxCurrent,
              maxWind, ladder, alerts, tz, thresholds, window, currentAt,
-             fogSummary, fogSplit, liveCurrents, getOff, jetties };
+             fogSummary, fogSplit, liveCurrents, getOff, jetties,
+             /* Weighted by distance, not leg count: a personalised figure
+                covering most of the passage matters more than one covering a
+                few short legs near a berth. */
+             speedBasis: briefSpeedBasis };
   });
 }
 
@@ -6705,6 +7497,29 @@ function renderBrief(b) {
         ${logged} of ${TRIP_EVENTS.length} events logged. Open the Trip tab to record times.</div>`;
     })()}
 
+    ${(() => {
+      const sb = b.speedBasis;
+      if (!sb) return '';
+      if (sb.basis === 'baseline')
+        return `<p style="font-size:11.5px;color:var(--faint);margin:10px 0 0;line-height:1.5">
+          ETAs from the speed table.${sb.trips ? '' : ' No comparable recorded passages yet — they will personalise as you log trips.'}
+          <button class="btn" id="learnInfo" style="margin-top:8px">About ETA learning</button></p>`;
+      // uncertainty, expressed as time across the passage rather than knots
+      const hrs = (t.endEpoch - t.underwayEpoch) / HOUR;
+      const band = sb.spreadKts != null && t.totalNm > 0
+        ? Math.round(hrs * 60 * (sb.spreadKts / (t.totalNm / Math.max(hrs, 0.1)))) : null;
+      return `<div class="mockbar" style="border-color:var(--line);background:var(--deck);color:var(--dim)">
+        <b style="color:var(--ink)">${sb.basis === 'personalized' ? 'Personalized ETA' : 'Blended ETA'}</b> ·
+        based on ${sb.trips} comparable passage${sb.trips === 1 ? '' : 's'}
+        (${sb.observations} recorded interval${sb.observations === 1 ? '' : 's'}),
+        covering ${Math.round((sb.learnedShare || 0) * 100)}% of the distance.
+        The rest uses the speed table.
+        ${sb.basis === 'blended' ? 'Still weighted toward the speed table — it shifts as more trips are recorded.' : ''}
+        ${band != null && band > 0 ? `Typical spread about ±${band} min over this passage.` : ''}
+        ${sb.carriesCurrent ? '<br>Some history had no current recorded, so those speeds carry whatever current was running that day.' : ''}
+        <br><button class="btn" id="learnBaseline" style="margin-top:9px">Use the speed table instead</button></div>`;
+    })()}
+
     <div class="rule"></div>
     <p class="eyebrow">Log position</p>
     <div class="uw" id="cpBox"></div>
@@ -6753,6 +7568,11 @@ function renderBrief(b) {
     </div>`;
 
   $('#bBack').addEventListener('click', () => show('viewPlan'));
+  if ($('#learnBaseline')) $('#learnBaseline').addEventListener('click', async () => {
+    learnSetSetting('enabled', false);
+    await rebuildWithAnchors(Store.get('anchors', []));
+  });
+  if ($('#learnInfo')) $('#learnInfo').addEventListener('click', () => { renderAdmin(); show('viewAdmin'); });
   renderCheckpoints();
   const fogCard = $('#fogCard');
   if (fogCard) fogCard.addEventListener('click', () => { show('viewFog'); renderFog(); });
@@ -6856,6 +7676,75 @@ function renderAdmin() {
       <p style="font-size:12.5px;color:var(--faint);margin:10px 0 0;line-height:1.55">
         Satellite fog imagery isn't a forecast and can't be built into the brief:
         <a href="https://www.ospo.noaa.gov/products/atmosphere/clouds/fls/" style="color:var(--info)">open the GOES fog product</a>.</p>
+    </div>
+
+    <div class="adminsec">
+      <p class="eyebrow">ETA learning</p>
+      ${(() => {
+        const st = learnSettings();
+        const obs = allObservations();
+        const usable = obs.filter(o => o.usable);
+        const trips = new Set(usable.map(o => o.tripNumber)).size;
+        const ev = evaluateLearning();
+        const byKey = {};
+        for (const o of usable) (byKey[o.key] = byKey[o.key] || []).push(o);
+        return `<div class="seg" id="aLearn" style="margin-bottom:12px">
+            <button type="button" data-v="1"${st.enabled ? ' class="on"' : ''}>Learn from my trips</button>
+            <button type="button" data-v="0"${!st.enabled ? ' class="on"' : ''}>Speed table only</button>
+          </div>
+          <div class="uline"><span class="k">Recorded passages used</span><span class="v">${trips}</span></div>
+          <div class="uline"><span class="k">Usable intervals</span><span class="v">${usable.length} of ${obs.length}</span></div>
+          ${ev.rows && ev.rows.length ? `
+            <div class="uline"><span class="k">Table error</span><span class="v">${ev.baselineMaeMin.toFixed(1)} min</span></div>
+            <div class="uline"><span class="k">Learned error</span><span class="v">${ev.learnedMaeMin.toFixed(1)} min</span></div>
+            <p style="font-size:11.5px;color:var(--faint);margin:8px 0 0;line-height:1.5">
+              Average error across ${ev.intervals} intervals from ${ev.trips} trips, each predicted using only
+              the trips recorded before it.</p>`
+            : `<p style="font-size:12px;color:var(--faint);margin:8px 0 0;line-height:1.5">
+              Not enough recorded passages to measure whether learning beats the table yet.</p>`}
+          ${Object.keys(byKey).length ? `<p style="font-size:11.5px;color:var(--faint);margin:10px 0 0;line-height:1.6">
+            ${Object.entries(byKey).sort((a,b)=>b[1].length-a[1].length).slice(0,8).map(([k,v]) =>
+              esc(k.replace('span:','')) + ' — ' + v.length).join('<br>')}</p>` : ''}
+          ${(() => {
+            const pa = prospectiveAccuracy();
+            if (!pa.earliest.n) return `<p style="font-size:11.5px;color:var(--faint);margin:10px 0 0;line-height:1.5">
+              <b style="color:var(--dim)">Real accuracy:</b> no checkpoint has yet been reached after
+              the app predicted it. This fills in as you log trips.</p>`;
+            return `<p style="font-size:11.5px;color:var(--faint);margin:10px 0 0;line-height:1.6">
+              <b style="color:var(--dim)">Real accuracy</b> — predictions made before the event, compared
+              with what happened. ${pa.trips} trip${pa.trips === 1 ? '' : 's'}.<br>
+              First call (${Math.round(pa.earliest.n)} checkpoints):
+              app ${pa.earliest.appMaeMin.toFixed(1)} min${pa.earliest.baselineMaeMin != null
+                ? ', table ' + pa.earliest.baselineMaeMin.toFixed(1) + ' min' : ''}<br>
+              Last call before arrival: app ${pa.latest.appMaeMin.toFixed(1)} min<br>
+              <span style="color:var(--faint)">Separate from the walk-forward figures above, which
+              re-predict past trips rather than measuring what the app actually said at the time.</span></p>`;
+          })()}
+          <p style="font-size:11.5px;color:var(--faint);margin:10px 0 0;line-height:1.5">
+            Learned speeds are used for predicting arrival times only. They are not recommended
+            operating speeds, and the speed table stays as the fallback.</p>`;
+      })()}
+    </div>
+
+    <div class="adminsec">
+      <p class="eyebrow">Backup</p>
+      ${(() => {
+        const c = buildBackup().counts;
+        return `<div class="uline"><span class="k">Completed trips</span><span class="v">${c.trips}</span></div>
+          <div class="uline"><span class="k">Recorded times</span><span class="v">${c.recordedTimes}</span></div>
+          <div class="uline"><span class="k">Predictions kept</span><span class="v">${c.predictions}</span></div>`;
+      })()}
+      <button class="generate" id="aBackup" style="padding:15px;margin-top:12px">Back up everything</button>
+      <div class="field" style="margin-top:12px"><label for="aRestore">Restore from a backup file</label>
+        <input class="control" id="aRestore" type="file" accept="application/json,.json"></div>
+      <span id="aBackupMsg" style="font-size:12px;color:var(--dim)"></span>
+      <p style="font-size:12.5px;color:var(--dim);margin:10px 0 0;line-height:1.55">
+        Carries the parts you could not retype: actual times with the draft and current captured
+        when you logged them, exclusions, and every ETA the app predicted before the fact. Keep a
+        copy somewhere off the phone — clearing Safari website data deletes all of it.</p>
+      <p style="font-size:11.5px;color:var(--faint);margin:8px 0 0;line-height:1.5">
+        Restoring merges by trip number: trips already on this device are kept unless the backup
+        holds more recorded times for the same trip.</p>
     </div>
 
     <div class="adminsec">
@@ -6968,6 +7857,35 @@ function renderAdmin() {
     applySpeedOverrides();
     renderAdmin();
   });
+  $('#aBackup').addEventListener('click', async () => {
+    const stamp = new Date().toISOString().slice(0, 10);
+    const r = await shareText('transit-brief-backup-' + stamp + '.json', 'application/json',
+      JSON.stringify(buildBackup(), null, 1));
+    $('#aBackupMsg').textContent = r === 'shared' ? ' Shared.'
+      : r === 'downloaded' ? ' Saved to your downloads.'
+      : r === 'cancelled' ? '' : ' Could not export.';
+  });
+  $('#aRestore').addEventListener('change', e => {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    const rd = new FileReader();
+    rd.onload = () => {
+      let obj = null;
+      try { obj = JSON.parse(rd.result); }
+      catch (err) { $('#aBackupMsg').textContent = ' That file is not readable JSON.'; return; }
+      const res = restoreBackup(obj);
+      $('#aBackupMsg').textContent = res.ok
+        ? ` Restored. ${res.added} trip(s) added, ${res.merged} updated, ${res.total} total.`
+        : ' ' + res.error;
+      if (res.ok) renderAdmin();
+    };
+    rd.onerror = () => { $('#aBackupMsg').textContent = ' Could not read that file.'; };
+    rd.readAsText(f);
+  });
+  document.querySelectorAll('#aLearn button').forEach(b => b.addEventListener('click', () => {
+    learnSetSetting('enabled', b.dataset.v === '1');
+    renderAdmin();
+  }));
   $('#aJournal').addEventListener('change', e => {
     const v = (e.target.value || '').trim();
     if (v && !looksLikeAirtableForm(v)) {
@@ -8500,6 +9418,35 @@ function renderTrip() {
       <div class="jhead">${t.ship && t.ship.trim() ? esc(t.ship) + '<br>' : ''}${esc(t.fromName)} → ${esc(t.toName)}</div>
       ${journalBlockHtml(t)}
       <div class="rule"></div>
+      ${(() => {
+        const obs = tripObservations({ ...t, excludeFromLearning: false });
+        const usable = obs.filter(o => o.usable);
+        const flagged = obs.filter(o => o.flags.length);
+        const label = k => { const e = TRIP_EVENTS.find(x => x.key === k); return e ? e.label : k; };
+        return `<p class="eyebrow">ETA learning</p>
+          <div class="uw">
+            <div class="uline"><span class="k">Contributes</span><span class="v">${
+              t.excludeFromLearning ? 'excluded' : usable.length + ' of ' + obs.length + ' intervals'}</span></div>
+            ${obs.map(o => {
+              const ex = !!(t.events[o.to] && t.events[o.to].excludeFromLearning);
+              return `<div class="offrow">
+                <div class="offhead">
+                  <span class="offlbl">${esc(label(o.from))} → ${esc(label(o.to))}
+                    <span class="offneed">${o.distanceNm.toFixed(1)} nm ·
+                      ${fmtDuration(o.elapsedMs)}${o.sogKts != null ? ' · ' + o.sogKts.toFixed(1) + ' kt over ground' : ''}${
+                      ex ? ' · excluded' : o.flags.length ? ' · not used' : ' · used'}</span></span>
+                  <button class="btn" data-xint="${esc(o.to)}">${ex ? 'Include' : 'Exclude'}</button>
+                </div>
+                ${o.flags.length ? `<div class="offpend">${esc(o.flags.join('; '))}</div>` : ''}
+              </div>`;
+            }).join('')}
+            <button class="btn" id="trExclude" style="margin-top:10px">${
+              t.excludeFromLearning ? 'Include the whole trip' : 'Exclude the whole trip'}</button>
+            <p style="font-size:11.5px;color:var(--faint);margin:8px 0 0;line-height:1.5">
+              Excluding keeps the trip in the journal and only removes it from ETA learning.</p>
+          </div>
+          <div class="rule"></div>`;
+      })()}
       <button class="btn" id="trShare">Save / share trip log</button>
       <div class="foot">Times shown are actual recorded times, not ETAs.<br><br>
         Saving on this device and saving to the journal are different things. The journal
@@ -8520,6 +9467,33 @@ function renderTrip() {
       if (v) rec.dateOverride = v; else delete rec.dateOverride;
       tripSave(d);
       TRIPUI.msg = v ? 'Trip date updated.' : 'Trip date reset to the first recorded event.';
+      TRIPUI.msgOk = true;
+      renderTrip();
+    });
+    /* Excluding one interval marks the event that ENDS it, so the stretch
+       leading up to a hold is dropped while the rest of the trip still counts. */
+    document.querySelectorAll('[data-xint]').forEach(btn => btn.addEventListener('click', () => {
+      const d = tripStore();
+      const rec = d.trips.find(x => String(x.number) === String(t.number));
+      if (!rec || !rec.events[btn.dataset.xint]) return;
+      const e = rec.events[btn.dataset.xint];
+      e.excludeFromLearning = !e.excludeFromLearning;
+      tripSave(d);
+      TRIPUI.msg = e.excludeFromLearning
+        ? 'Interval excluded from speed learning. The time is still recorded.'
+        : 'Interval included in speed learning again.';
+      TRIPUI.msgOk = true;
+      renderTrip();
+    }));
+    $('#trExclude').addEventListener('click', () => {
+      const d = tripStore();
+      const rec = d.trips.find(x => String(x.number) === String(t.number));
+      if (!rec) return;
+      rec.excludeFromLearning = !rec.excludeFromLearning;
+      tripSave(d);
+      TRIPUI.msg = rec.excludeFromLearning
+        ? 'Excluded from speed learning. Still in the journal.'
+        : 'Included in speed learning again.';
       TRIPUI.msgOk = true;
       renderTrip();
     });
