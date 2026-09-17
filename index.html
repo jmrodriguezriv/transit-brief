@@ -1179,7 +1179,7 @@ var CHANNEL_DATA = {
   },
   {
    "id": "DE_GATE",
-   "name": "Devils Elbow Entrance",
+   "name": "ICW",
    "lon": -93.327173,
    "lat": 30.094713,
    "type": "JUNCTION",
@@ -3773,6 +3773,34 @@ const GET_OFF_BUOYS = [
 ];
 const GET_OFF_MIN_DRAFT_FT = 30.0;
 
+/* ---------------------------------------------------------------------------
+   DRAFT UNITS
+   Draft may be entered in feet or metres. Feet is the internal unit because
+   the get-off buoy thresholds are defined in feet; metres are converted on the
+   way in at full precision and rounded only for display, so a value never
+   drifts by being switched back and forth.
+   ------------------------------------------------------------------------- */
+const FT_PER_M = 3.280839895013123;
+
+function draftToFt(value, unit) {
+  const v = parseFloat(value);
+  if (!isFinite(v)) return null;
+  return unit === 'm' ? v * FT_PER_M : v;
+}
+
+function draftFromFt(ft, unit) {
+  if (ft == null || !isFinite(ft)) return null;
+  return unit === 'm' ? ft / FT_PER_M : ft;
+}
+
+/** Display with the unit attached — a bare number is never shown. */
+function fmtDraft(ft, unit) {
+  if (ft == null || !isFinite(ft)) return '';
+  const u = unit || 'ft';
+  const v = draftFromFt(ft, u);
+  return u === 'm' ? `${v.toFixed(2)} m` : `${v.toFixed(1)} ft`;
+}
+
 function getOffBuoyFor(draftFt) {
   if (draftFt == null || !isFinite(draftFt)) return null;
   if (draftFt < GET_OFF_MIN_DRAFT_FT)
@@ -4582,7 +4610,9 @@ const isObservedCurrentStation = id => OBSERVED_CURRENT_STATIONS.includes(id);
 const TRIP_EVENTS = [
   { key: 'LAST_LINE',  label: 'Last Line',    nodeId: null, manual: true, when: 'OUTBOUND' },
   { key: 'BR210',      label: 'I-210 Bridge', nodeId: 'BR210' },
-  { key: 'ICW',        label: 'ICW',          nodeId: 'MK_91_92' },
+  /* The ICW crossing is the Devils Elbow entrance, not Light 91/92 — the
+     earlier mapping was 0.41 nm short. Light 91/92 is a plain mark again. */
+  { key: 'ICW',        label: 'ICW',          nodeId: 'DE_GATE' },
   { key: 'B60',        label: '60 Beacon',    nodeId: 'MK_60' },
   { key: 'B36',        label: '36 Buoy',      nodeId: 'MK_35_36' },
   /* Calcasieu Channel Lighted Buoy CC — a geographic route point that anchors
@@ -4613,7 +4643,7 @@ const OFFICE_INBOUND = [
 const OFFICE_OUTBOUND = [
   { key: 'LAST_LINE',  label: 'Last Line',     trip: 'LAST_LINE',  asks: ['draft'], manual: true },
   { key: 'ICW',        label: 'ICW',           trip: 'ICW',        asks: ['ride'] },
-  { key: 'B36',        label: '36 Buoy',       trip: 'B36',        asks: [] }
+  { key: 'B36',        label: '36 Buoy',       trip: 'B36',        asks: ['draftIfNeeded'] }
 ];
 
 function officeSequence(outbound) { return outbound ? OFFICE_OUTBOUND : OFFICE_INBOUND; }
@@ -4650,7 +4680,7 @@ function officeMessage(step, trip, tz) {
   for (const ask of step.asks) {
     if (ask === 'draft' || ask === 'draftIfNeeded') {
       if (trip.draftFt != null && trip.draftFt !== '')
-        parts.push(`Draft ${Number(trip.draftFt).toFixed(1)} ft`);
+        parts.push(`Draft ${fmtDraft(Number(trip.draftFt), tripDraftUnit(trip))}`);
     } else if (ask === 'tugs') {
       const tt = tugText(trip.tugs);
       if (tt) parts.push(tt);
@@ -4906,11 +4936,13 @@ function tripEventOrder(transit) {
   const order = transit.waypoints.map(w => w.point.id);
   const onRoute = positional.filter(e => e.nodeId && order.includes(e.nodeId));
   onRoute.sort((a, b) => order.indexOf(a.nodeId) - order.indexOf(b.nodeId));
-  // CC Buoy has no position yet: seaward end of the passage either way.
-  const cc = byKey('CC');
+  /* CC Buoy is a charted route node and sorts with the rest. It used to be
+     appended separately because it had no position; appending it now would
+     list it twice. Anything positional that is genuinely off this route is
+     omitted rather than tacked on. */
   if (transit.outbound)
-    return [byKey('LAST_LINE'), ...onRoute, cc];
-  return [cc, ...onRoute, byKey('FIRST_LINE'), byKey('ALL_FAST')];
+    return [byKey('LAST_LINE'), ...onRoute];
+  return [...onRoute, byKey('FIRST_LINE'), byKey('ALL_FAST')];
 }
 
 /* Full timestamp with zone, so a passage across midnight stays in order.
@@ -4919,6 +4951,10 @@ function tripEventOrder(transit) {
 function tripStamp(epoch) {
   const e = toMinute(epoch);
   return { epoch: e, iso: new Date(e).toISOString(), tz: TZ() };
+}
+
+function tripDraftUnit(trip) {
+  return (trip && trip.draftUnit) === 'm' ? 'm' : 'ft';
 }
 
 function tripStartActive(number, ship, transit) {
@@ -6108,8 +6144,14 @@ function renderPlan() {
         <div class="row2">
           <div class="field"><label for="fLoa">LOA (m)</label>
             <input class="control" id="fLoa" inputmode="decimal" value="${esc(form.loa)}"></div>
-          <div class="field"><label for="fDraft">Draft (ft)</label>
-            <input class="control" id="fDraft" inputmode="decimal" value="${esc(form.draft)}"></div>
+          <div class="field"><label for="fDraft">Draft</label>
+            <div class="row2" style="grid-template-columns:1fr auto;gap:8px">
+              <input class="control" id="fDraft" inputmode="decimal" value="${esc(form.draft)}">
+              <div class="seg" id="fDraftUnit" style="width:auto">
+                <button type="button" data-u="ft"${form.draftUnit !== 'm' ? ' class="on"' : ''}>ft</button>
+                <button type="button" data-u="m"${form.draftUnit === 'm' ? ' class="on"' : ''}>m</button>
+              </div>
+            </div></div>
         </div>
         <div class="field"><label for="fSpeed">Speed override (kt through water)</label>
           <input class="control" id="fSpeed" inputmode="decimal" value="${esc(form.speedOverride)}" placeholder="Leave blank to use segment speeds"></div>
@@ -6135,6 +6177,20 @@ function renderPlan() {
   };
   for (const id of ['fDate','fTime','fFrom','fTo','fVessel','fLoa','fDraft','fSpeed'])
     $('#' + id).addEventListener('change', sync);
+  /* Switching units converts the value rather than relabelling it, so the
+     physical draft stays the same. */
+  document.querySelectorAll('#fDraftUnit button').forEach(b => b.addEventListener('click', () => {
+    const to = b.dataset.u, from = form.draftUnit === 'm' ? 'm' : 'ft';
+    if (to === from) return;
+    const cur = parseFloat($('#fDraft').value);
+    if (isFinite(cur) && cur > 0) {
+      const ft = draftToFt(cur, from);
+      $('#fDraft').value = to === 'm' ? (ft / FT_PER_M).toFixed(2) : ft.toFixed(1);
+      form.draft = $('#fDraft').value;
+    }
+    form.draftUnit = to;
+    document.querySelectorAll('#fDraftUnit button').forEach(x => x.classList.toggle('on', x === b));
+  }));
   document.querySelectorAll('#fLive button').forEach(b => b.addEventListener('click', () => {
     Store.set('liveData', b.dataset.v === '1');
     document.querySelectorAll('#fLive button').forEach(x => x.classList.toggle('on', x === b));
@@ -6165,14 +6221,16 @@ async function generate() {
       anchors: Store.get('anchors', []),
       condition: form.condition === 'LIGHT' ? LIGHT : LOADED,
       speedOverride: isFinite(sp) && sp > 0 ? sp : null,
-      vessel: form.vessel, draftFt: form.draft
+      vessel: form.vessel,
+      draftFt: draftToFt(form.draft, form.draftUnit), draftUnit: form.draftUnit || 'ft'
     });
     Underway.reset();
     Store.set('anchors', []);
     Store.set('lastBrief', {
       fromId: form.fromId, toId: form.toId, sailEpoch,
       condition: form.condition, speedOverride: form.speedOverride,
-      vessel: form.vessel, draftFt: form.draft, generatedAt: Date.now()
+      vessel: form.vessel, draftFt: form.draft, draftUnit: form.draftUnit || 'ft',
+      generatedAt: Date.now()
     });
     renderBrief(LAST); show('viewBrief');
   } catch (e) {
@@ -7483,7 +7541,7 @@ const PICKER_POSITIONS = [
   { id: 'MK_41_42', label: '42 Buoy (Jetty)' },
   { id: 'MK_60',    label: '60 Beacon' },
   { id: 'MK_79_80', label: '80 Beacon' },
-  { id: 'MK_91_92', label: 'ICW' },
+  { id: 'DE_GATE',  label: 'ICW' },
   { id: 'BR210',    label: 'I-210 Bridge' }
 ];
 
@@ -8218,13 +8276,32 @@ async function renderFog() {
    TRIP LOG: EXPORT
    The record must survive outside the app. Text for reading, CSV for keeping.
    ------------------------------------------------------------------------- */
-function tripDateLine(trip) {
-  const stamps = Object.values(trip.events || {}).map(e => e.epoch).filter(Boolean);
-  const when = stamps.length ? Math.min(...stamps) : (trip.completedAt || trip.startedAt);
-  // A trip with nothing timestamped yet must still export, not throw.
+/* The trip date is normally the earliest recorded event, but it can be
+   overridden — a job that started before midnight may belong to the previous
+   day's book. The override is stored as a plain Y-M-D string rather than an
+   epoch, so it cannot shift across a timezone boundary, and it never touches
+   the recorded event times. */
+function tripDateYMD(trip) {
+  if (trip && trip.dateOverride && /^\d{4}-\d{2}-\d{2}$/.test(trip.dateOverride))
+    return trip.dateOverride;
+  const stamps = Object.values((trip && trip.events) || {}).map(e => e.epoch).filter(Boolean);
+  const when = stamps.length ? Math.min(...stamps) : (trip && (trip.completedAt || trip.startedAt));
   if (!isFinite(when)) return '';
-  return new Intl.DateTimeFormat('en-US', { timeZone: TZ(),
-    month: 'long', day: 'numeric', year: 'numeric' }).format(new Date(when));
+  const p = {};
+  for (const x of new Intl.DateTimeFormat('en-CA', { timeZone: TZ(),
+      year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(when)))
+    if (x.type !== 'literal') p[x.type] = x.value;
+  return `${p.year}-${p.month}-${p.day}`;
+}
+
+function tripDateLine(trip) {
+  const ymd = tripDateYMD(trip);
+  if (!ymd) return '';
+  const [y, m, d] = ymd.split('-').map(Number);
+  // Formatted from the parts, never from an epoch, so the day cannot slip.
+  return new Intl.DateTimeFormat('en-US', { timeZone: 'UTC',
+    month: 'long', day: 'numeric', year: 'numeric' })
+    .format(new Date(Date.UTC(y, m - 1, d, 12)));
 }
 
 function tripToText(trip) {
@@ -8379,7 +8456,12 @@ function renderTrip() {
       <p class="eyebrow">Trip ${esc(String(t.number))}</p>
       <div class="uw">
         ${t.ship && t.ship.trim() ? `<div class="uline"><span class="k">Ship</span><span class="v">${esc(t.ship)}</span></div>` : ''}
-        <div class="uline"><span class="k">Date</span><span class="v">${esc(tripDateLine(t))}</span></div>
+        <div class="uline"><span class="k">Date</span><span class="v">${esc(tripDateLine(t))}${
+          t.dateOverride ? '<br><span style="font-size:11px;color:var(--faint);font-weight:400">edited</span>' : ''}</span></div>
+        <div class="field" style="margin-top:10px"><label for="trDate">Trip date</label>
+          <input class="control" type="date" id="trDate" value="${esc(tripDateYMD(t))}"></div>
+        <div style="font-size:11.5px;color:var(--faint);line-height:1.5">
+          Changing this does not alter any recorded time.</div>
         <div class="uline"><span class="k">From</span><span class="v">${esc(t.fromName)}</span></div>
         <div class="uline"><span class="k">To</span><span class="v">${esc(t.toName)}</span></div>
       </div>
@@ -8401,6 +8483,21 @@ function renderTrip() {
         app cannot confirm that you did.</div>`;
     $('#trBack').addEventListener('click', () => {
       TRIPUI.open = null; TRIPUI.msg = null; TRIPUI.reopen = null; renderTrip();
+    });
+    $('#trDate').addEventListener('change', e => {
+      const v = (e.target.value || '').trim();
+      if (v && !/^\d{4}-\d{2}-\d{2}$/.test(v)) {
+        TRIPUI.msg = 'Enter a date as YYYY-MM-DD.'; TRIPUI.msgOk = false; renderTrip(); return;
+      }
+      const d = tripStore();
+      const rec = d.trips.find(x => String(x.number) === String(t.number));
+      if (!rec) return;
+      // Stored as a date string; recorded event times are left alone.
+      if (v) rec.dateOverride = v; else delete rec.dateOverride;
+      tripSave(d);
+      TRIPUI.msg = v ? 'Trip date updated.' : 'Trip date reset to the first recorded event.';
+      TRIPUI.msgOk = true;
+      renderTrip();
     });
     bindJournal(t);
     $('#trShare').addEventListener('click', async () => {
@@ -8485,9 +8582,25 @@ function renderTrip() {
     return;
   }
 
-  /* ---- current trip ---- */
-  const events = tripEventOrder(LAST ? LAST.transit : null).map(ev => {
+  /* ---- one chronological trip log ----
+     Events and office check-ins were two lists that repeated the same
+     waypoints. They are now a single ordered log: one row per event, carrying
+     its recorded time, its planned ETA where one exists, and its office report
+     and send action where the event is a reporting point. */
+  const outbound = !!(LAST && LAST.transit && LAST.transit.outbound);
+  const howLabelT = { messages: 'Messages opened', shared: 'Share opened', copied: 'Copied' };
+
+  const ordered = tripEventOrder(LAST ? LAST.transit : null);
+  const logRows = ordered.map(ev => {
     const e = a.events[ev.key];
+    const stepFor = officeStepFor(ev.key, outbound);
+
+    /* Tapping Log now on a reporting point opens the office entry form — time
+       plus whatever that checkpoint asks for — in place of its own row. */
+    if (stepFor && OFFICEUI.asking === stepFor.key) {
+      return officeFormHtml(stepFor, a, TZ());
+    }
+
     if (TRIPUI.editing === ev.key) {
       return `<div class="uw" style="margin:8px 0">
         <div class="field" style="margin-bottom:10px"><label for="trT">${esc(ev.label)} — actual time</label>
@@ -8496,12 +8609,52 @@ function renderTrip() {
         <button class="btn" id="trCancelT" style="margin-top:8px">Cancel</button>
       </div>`;
     }
-    return `<div class="cprep">
-      <span class="cprepl"><b>${e ? '✓ ' : '○ '}${esc(ev.label)}</b>
-        <span>${e ? fmtClock(e.epoch, e.tz || TZ()) : 'Not logged'}${
-          ev.pendingPosition ? ' · manual, position not yet defined' : ''}</span></span>
-      ${e ? `<button class="btn cpedit" data-tedit="${ev.key}">Edit</button>`
-          : `<button class="btn" data-tlog="${ev.key}">Log now</button>`}
+
+    // The planned ETA, shown only where it differs from what was recorded, and
+    // always labelled so an estimate is never mistaken for an actual.
+    let planned = null;
+    if (ev.nodeId && LAST && LAST.transit) {
+      const w = LAST.transit.waypoints.find(x => x.point.id === ev.nodeId);
+      if (w) planned = w.originalEta != null ? w.originalEta : w.eta;
+    }
+
+    const step = officeStepFor(ev.key, outbound);
+    const st = step ? officeStatus(step, a, TZ()) : null;
+    let office = '';
+    if (st && st.state === 'ready') {
+      const outstanding = officeMissing(step, a).filter(x => x !== 'actual time');
+      office = `<div class="offready${outstanding.length ? ' partial' : ''}">${
+          outstanding.length ? 'Office — ' + esc(outstanding.join(', ')) + ' outstanding' : 'Ready for office'}</div>
+        <div class="offmsg">${esc(st.text)}</div>
+        <button class="offbig${outstanding.length ? ' correction' : ''}" data-lsend="${esc(step.key)}">${
+          outstanding.length ? 'Send without ' + esc(outstanding.join(', ')) : 'Send message'}</button>`;
+    } else if (st && st.state === 'changed') {
+      office = `<div class="offwarn">Already prepared with previous information</div>
+        <div class="offmsg">CORRECTION — ${esc(st.text)}</div>
+        <button class="offbig correction" data-lsend="${esc(step.key)}" data-correction="1">Send correction</button>`;
+    } else if (st && st.state === 'prepared') {
+      office = `<div class="offmsg">${esc(st.text)}</div>
+        <div class="offstate">${esc(howLabelT[st.how] || 'Prepared')} ${fmtClock(st.at, TZ())} —
+          the app cannot confirm it was sent</div>
+        <button class="btn offsend" data-lsend="${esc(step.key)}">Open again</button>`;
+    } else if (st) {
+      office = `<div class="offpend">Office report needs ${esc(officeMissing(step, a).join(', '))}</div>`;
+    }
+
+    const detail = step
+      ? `<button class="btn" data-off="${esc(step.key)}">${e ? 'Edit' : 'Log now'}</button>`
+      : (e ? `<button class="btn cpedit" data-tedit="${ev.key}">Edit</button>`
+           : `<button class="btn" data-tlog="${ev.key}">Log now</button>`);
+
+    return `<div class="offrow">
+      <div class="offhead">
+        <span class="offlbl">${e ? '✓' : '○'} ${esc(ev.label)}
+          <span class="offneed">${e ? 'Actual ' + fmtClock(e.epoch, e.tz || TZ()) : 'Not logged'}${
+            planned != null ? ` · ETA ${fmtClock(planned, TZ())}` : ''}${
+            step ? ' · office report' : ''}</span></span>
+        ${detail}
+      </div>
+      ${office}
     </div>`;
   }).join('');
 
@@ -8515,15 +8668,16 @@ function renderTrip() {
       <div class="uline"><span class="k">Route</span><span class="v">${esc(a.fromName)} → ${esc(a.toName)}</span></div>
     </div>
     <div class="rule"></div>
-    <p class="eyebrow">Events</p>
-    ${events}
+    <p class="eyebrow">Trip log — ${outbound ? 'outbound' : 'inbound'}</p>
+    ${logRows}
+    <p style="font-size:11.5px;color:var(--faint);margin:10px 0 0;line-height:1.5">
+      One entry per event, in the order you meet them. <b>Actual</b> is a time you
+      recorded; <b>ETA</b> is the planned estimate and is never saved as an actual.
+      Times entered on the Brief appear here automatically, and office reports are
+      sent from the same row.</p>
     <div class="rule"></div>
     <button class="generate" id="trReview" style="padding:15px">Complete &amp; save trip</button>
     <button class="btn" id="trDiscard" style="margin-top:8px">Discard trip</button>
-    <p style="font-size:11.5px;color:var(--faint);margin:8px 0 0;line-height:1.5">
-      Actual times only — never an ETA. Everything is saved as you enter it. Times entered
-      through Update ETA appear here automatically.</p>
-    ${officeHtml(a, TZ())}
     ${tripHistoryHtml(d)}`;
 
   $('#trShip2').addEventListener('change', e => { tripSetField('ship', e.target.value); });
@@ -8645,8 +8799,21 @@ function officeFormHtml(step, a, tz) {
     <input class="control" type="time" id="offT" value="${esc(timeVal)}"></div>`);
   for (const ask of step.asks) {
     if (ask === 'draft' || ask === 'draftIfNeeded')
-      f.push(`<div class="field" style="margin-bottom:10px"><label for="offDraft">Draft (ft)${ask === 'draftIfNeeded' ? ' — if not already reported' : ''}</label>
-        <input class="control" id="offDraft" inputmode="decimal" value="${esc(a.draftFt != null ? String(a.draftFt) : '')}" placeholder="e.g. 38.5"></div>`);
+      f.push((() => {
+        const u = tripDraftUnit(a);
+        const shown = a.draftFt != null
+          ? (u === 'm' ? (a.draftFt / FT_PER_M).toFixed(2) : Number(a.draftFt).toFixed(1)) : '';
+        return `<div class="field" style="margin-bottom:10px"><label for="offDraft">Draft${
+            ask === 'draftIfNeeded' ? ' — confirm or change' : ''}</label>
+          <div class="row2" style="grid-template-columns:1fr auto;gap:8px">
+            <input class="control" id="offDraft" inputmode="decimal" value="${esc(shown)}" placeholder="${u === 'm' ? 'e.g. 11.5' : 'e.g. 38.5'}">
+            <div class="seg" id="offDraftUnit" style="width:auto">
+              <button type="button" data-u="ft"${u !== 'm' ? ' class="on"' : ''}>ft</button>
+              <button type="button" data-u="m"${u === 'm' ? ' class="on"' : ''}>m</button>
+            </div>
+          </div>
+          <div id="offDraftNote" style="font-size:11.5px;color:var(--caution);margin-top:6px"></div></div>`;
+      })());
     if (ask === 'tugs') {
       const tg = a.tugs || {};
       const ty = tg.types || [];
@@ -8699,11 +8866,31 @@ async function officeSave(stepKey, outbound) {
   const epoch = resolveReportTime(v, existing ? existing.epoch : Date.now(), TZ());
 
   if ($('#offDraft')) {
-    const d = parseFloat($('#offDraft').value);
-    if ($('#offDraft').value.trim() !== '' && (!isFinite(d) || d <= 0)) {
-      OFFICEUI.msg = 'Draft must be a number in feet.'; OFFICEUI.msgOk = false; renderTrip(); return;
+    const unitBtn = document.querySelector('#offDraftUnit .on');
+    const unit = unitBtn ? unitBtn.dataset.u : tripDraftUnit(a);
+    const raw = ($('#offDraft').value || '').trim();
+    const d = parseFloat(raw);
+    if (raw !== '' && (!isFinite(d) || d <= 0)) {
+      OFFICEUI.msg = 'Draft must be a positive number.'; OFFICEUI.msgOk = false; renderTrip(); return;
     }
-    if (isFinite(d) && d > 0) tripSetField('draftFt', d);
+    if (isFinite(d) && d > 0) {
+      const ft = draftToFt(d, unit);
+      const prevFt = a.draftFt;
+      /* Keep what was reported at each check-in. Messages already sent are not
+         rewritten and nothing is resent — the record simply shows both. */
+      const hist = (a.draftHistory || []).filter(h => h.step !== step.key);
+      hist.push({ step: step.key, label: step.label, draftFt: ft, unit, at: Date.now() });
+      tripSetField('draftHistory', hist);
+      tripSetField('draftFt', ft);
+      tripSetField('draftUnit', unit);
+      if (prevFt != null && Math.abs(prevFt - ft) > 0.05) {
+        const earlier = (a.draftHistory || []).find(h => h.step !== step.key);
+        OFFICEUI.draftNotice = `Draft now ${fmtDraft(ft, unit)}` +
+          (earlier ? ` — differs from ${fmtDraft(earlier.draftFt, earlier.unit)} reported at ${earlier.label}.`
+                   : ` — changed from ${fmtDraft(prevFt, tripDraftUnit(a))}.`) +
+          ' Earlier messages are unchanged and nothing has been resent.';
+      }
+    }
   }
   if ($('#offCh')) {
     const c = ($('#offCh').value || '').trim();
@@ -8725,8 +8912,10 @@ async function officeSave(stepKey, outbound) {
   tripSetEvent(step.trip, epoch);
   const rr = await tripSyncToAnchor(step.trip, epoch);
   OFFICEUI.asking = null; OFFICEUI.time = null;
-  OFFICEUI.msg = rr.anchored ? 'Saved — ETAs re-solved from here.' : 'Saved.';
-  OFFICEUI.msgOk = true;
+  const baseMsg = rr.anchored ? 'Saved — ETAs re-solved from here.' : 'Saved.';
+  OFFICEUI.msg = OFFICEUI.draftNotice ? baseMsg + ' ' + OFFICEUI.draftNotice : baseMsg;
+  OFFICEUI.msgOk = !OFFICEUI.draftNotice;
+  OFFICEUI.draftNotice = null;
   renderTrip();
 }
 
@@ -8738,6 +8927,21 @@ function bindOffice(outbound) {
     OFFICEUI.asking = null; OFFICEUI.time = null; renderTrip();
   });
   if ($('#offSave')) $('#offSave').addEventListener('click', () => officeSave(OFFICEUI.asking, outbound));
+  {
+    const box = document.querySelector('#offDraftUnit');
+    if (box) box.querySelectorAll('button').forEach(btn => btn.addEventListener('click', () => {
+      const cur = document.querySelector('#offDraftUnit .on');
+      const from = cur ? cur.dataset.u : 'ft', to = btn.dataset.u;
+      if (to === from) return;
+      const inp = document.querySelector('#offDraft');
+      const v = parseFloat(inp.value);
+      if (isFinite(v) && v > 0) {
+        const ft = draftToFt(v, from);
+        inp.value = to === 'm' ? (ft / FT_PER_M).toFixed(2) : ft.toFixed(1);
+      }
+      box.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === btn));
+    }));
+  }
   for (const id of ['#offCount', '#offT1', '#offT2']) {
     const box = document.querySelector(id);
     if (!box) continue;
@@ -8858,6 +9062,21 @@ renderPlan();
   $('#resumeTrip').addEventListener('click', () => { renderTrip(); show('viewTrip'); });
 })();
 
+/* One-time migration. The ICW checkpoint used to map to Light 91/92; reports
+   logged against it were ICW passings, so they move with the event rather than
+   being left 0.41 nm short. Trip-log times are keyed by event and were already
+   correct. Runs once and records that it has. */
+(function migrateIcwAnchor() {
+  if (Store.get('icwMigrated', false)) return;
+  const anchors = Store.get('anchors', []);
+  let moved = 0;
+  for (const anc of anchors) {
+    if (anc.nodeId === 'MK_91_92') { anc.nodeId = 'DE_GATE'; moved++; }
+  }
+  if (moved) Store.set('anchors', anchors);
+  Store.set('icwMigrated', true);
+})();
+
 (async function restoreLastBrief() {
   const saved = Store.get('lastBrief', null);
   if (!saved) return;
@@ -8877,8 +9096,12 @@ renderPlan();
   $('#reopen').addEventListener('click', async () => {
     $('#reopen').textContent = 'Working…';
     try {
+      /* Reopening must carry the reported positions. Without them the brief
+         comes back on plan times while the trip log still holds the actuals,
+         and the two disagree permanently. */
       LAST = await buildBrief({
         fromId: saved.fromId, toId: saved.toId, sailEpoch: saved.sailEpoch,
+        anchors: Store.get('anchors', []),
         condition: saved.condition === 'LIGHT' ? LIGHT : LOADED,
         speedOverride: parseFloat(saved.speedOverride) > 0 ? parseFloat(saved.speedOverride) : null,
         vessel: saved.vessel, draftFt: saved.draftFt
